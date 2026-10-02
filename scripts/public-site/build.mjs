@@ -290,13 +290,20 @@ async function copyDirectory(source, target) {
     await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
 }
 
-async function createBuildWorkspace(buildRoot, releaseId) {
+async function createBuildWorkspace(buildRoot, snapshot) {
+    // The legacy-removed catch-all route only prerenders pages when the snapshot
+    // actually carries /blog/ removed paths; with none, Next 15 export mode would
+    // reject the empty dynamic route, so the route is only copied when needed.
+    const hasRemovedBlogPaths = (snapshot.removedPaths ?? [])
+        .some((route) => String(route).toLowerCase().startsWith('/blog/'));
     const sourceFiles = [
         ['src/public-site/app/layout.tsx', 'src/app/layout.tsx'],
         ['src/public-site/app/globals.css', 'src/app/globals.css'],
         ['src/public-site/app/page.tsx', 'src/app/page.tsx'],
         ['src/public-site/app/blog/page.tsx', 'src/app/blog/page.tsx'],
-        ['src/public-site/app/blog/[...slug]/page.tsx', 'src/app/blog/[...slug]/page.tsx'],
+        ...(hasRemovedBlogPaths
+            ? [['src/public-site/app/blog/[...slug]/page.tsx', 'src/app/blog/[...slug]/page.tsx']]
+            : []),
         ['src/public-site/app/navigation/page.tsx', 'src/app/navigation/page.tsx'],
         ['src/public-site/app/search/page.tsx', 'src/app/search/page.tsx'],
         ['src/public-site/app/search-index.json/route.ts', 'src/app/search-index.json/route.ts'],
@@ -332,8 +339,18 @@ async function createBuildWorkspace(buildRoot, releaseId) {
     for (const [source, target] of sourceFiles) {
         await copyDirectory(path.join(projectRoot, source), path.join(buildRoot, target));
     }
+    // A workspace outside the project tree cannot resolve react/next by walking up
+    // (e.g. the container build volume), so link the locked dependency set in.
+    const relativeToProject = path.relative(projectRoot, buildRoot);
+    if (relativeToProject.startsWith('..') || path.isAbsolute(relativeToProject)) {
+        await fs.symlink(
+            path.join(projectRoot, 'node_modules'),
+            path.join(buildRoot, 'node_modules'),
+            process.platform === 'win32' ? 'junction' : 'dir',
+        );
+    }
     await fs.writeFile(path.join(buildRoot, 'next-env.d.ts'), '/// <reference types="next" />\n/// <reference types="next/image-types/global" />\n', { flag: 'wx' });
-    await fs.writeFile(path.join(buildRoot, 'next.config.mjs'), createNextConfig(releaseId), { flag: 'wx' });
+    await fs.writeFile(path.join(buildRoot, 'next.config.mjs'), createNextConfig(snapshot.releaseId), { flag: 'wx' });
     await fs.writeFile(path.join(buildRoot, 'package.json'), JSON.stringify({ name: 'g01-isolated-public-export', private: true, type: 'module' }), { flag: 'wx' });
     const tsconfig = {
         compilerOptions: {
@@ -406,7 +423,7 @@ async function main() {
     await fs.mkdir(buildWorkspaceParent, { recursive: true });
     const buildRoot = await fs.mkdtemp(path.join(buildWorkspaceParent, '.g01-public-site-'));
     try {
-        await createBuildWorkspace(buildRoot, snapshot.releaseId);
+        await createBuildWorkspace(buildRoot, snapshot);
         await writePublicShell(buildRoot, snapshot, snapshotPath);
         const result = spawnSync(process.execPath, [nextBin, 'build', buildRoot], {
             cwd: projectRoot,
