@@ -18,6 +18,10 @@ COPY content ./content
 COPY tests ./tests
 COPY scripts ./scripts
 
+# CJK fonts are required for the SVG share-card text rendered by sharp during
+# in-container public builds; without fontconfig the og images lose all text.
+RUN apk add --no-cache fontconfig font-noto-cjk
+
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \
     NEXT_PUBLIC_SITE_URL=https://guanlangzg.github.io
@@ -57,7 +61,7 @@ ENV NODE_ENV=production \
 
 # Keep the standalone management server under its own predictable root. The
 # separate public builder project at /app retains shared code and dev build tools.
-RUN apk add --no-cache curl su-exec libc6-compat && \
+RUN apk add --no-cache curl su-exec libc6-compat fontconfig font-noto-cjk && \
     addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs && \
     mkdir -p /home/nextjs /tmp /var/lib/guanlan/data /var/lib/guanlan/secrets /var/lib/guanlan/build \
@@ -90,7 +94,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static /app/management/.nex
 COPY --from=builder --chown=nextjs:nodejs /app/public /app/management/public
 COPY --from=builder --chown=nextjs:nodejs /app/content/seeds /app/management/content/seeds
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/admin /app/management/scripts/admin
-COPY --from=builder --chown=nextjs:nodejs /app/scripts/runtime /app/management/scripts/runtime
 COPY --from=builder --chown=nextjs:nodejs /app/src/lib/atomic-json-writer.ts /app/src/lib/editor-auth-password.ts /app/src/lib/editor-auth-runtime.ts /app/src/lib/editor-auth.ts /app/src/lib/runtime-config.ts /app/src/lib/runtime-environment.ts /app/management/src/lib/
 COPY --from=builder --chown=nextjs:nodejs /app/package.json /app/package-lock.json /app/management/
 
