@@ -1,0 +1,60 @@
+﻿# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+.next/
+dist/
+out/
+build/
+*.tsbuildinfo
+
+# Runtime content, private media, and backups
+/data/
+output/
+/data/**/backups/
+
+# Isolated public-site build workspaces
+.g01-public-site-*/
+
+# Credentials and local environment
+.env*
+!.env.example
+
+# Development
+.DS_Store
+*.local
+.trae/
+dispatches/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs and test artifacts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+__pycache__/
+*.py[cod]
+*.log
+
+# Local agent and workflow state
+.zcode/
+.codex/
+.zread/
+.playwright-mcp/
+.tmp/
+.claude/
+
+# Local screenshots
+/editor-*.png
+/public-home.png
+
+# Leftover local verification probes
+**/.rm-probe-*/

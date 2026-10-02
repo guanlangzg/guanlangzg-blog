@@ -1,0 +1,127 @@
+{
+  "name": "guanlangzg-blog",
+  "version": "1.0.0",
+  "description": "观澜志博客与导航网站",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/guanlangzg/guanlangzg-blog.git"
+  },
+  "bugs": {
+    "url": "https://github.com/guanlangzg/guanlangzg-blog/issues"
+  },
+  "homepage": "https://github.com/guanlangzg/guanlangzg-blog#readme",
+  "type": "module",
+  "packageManager": "npm@11.6.2",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:public": "node scripts/public-site/build.mjs",
+    "admin:init": "node scripts/admin/init-auth.mjs",
+    "test:release:fixture": "node scripts/test/create-release-fixture.mjs",
+    "test:release": "node scripts/test/verify-first-release.mjs",
+    "test:builder:container": "node scripts/test/verify-builder-container.mjs",
+    "start": "node scripts/start-standalone.mjs",
+    "lint": "eslint src tests eslint.config.mjs next.config.mjs postcss.config.mjs tailwind.config.ts",
+    "check:env": "node scripts/test/check-env-files.mjs",
+    "typecheck": "tsc --noEmit --incremental false --pretty false",
+    "audit:high": "npm audit --audit-level=high",
+    "deadcode": "knip",
+    "check": "npm run check:env && npm run lint && npm run typecheck && npm run test:run && npm run deadcode",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui",
+    "test:architecture": "vitest run tests/architecture",
+    "smoke:public": "python scripts/test/verify-public-ui.py",
+    "smoke:editor:login": "python scripts/test/verify-editor-login-ui.py",
+    "smoke:editor:home": "python scripts/test/verify-editor-home-ui.py",
+    "smoke:editor:navigation": "python scripts/test/verify-editor-navigation-ui.py",
+    "smoke:editor:blog": "python scripts/test/verify-editor-blog-ui.py",
+    "smoke:editor:settings": "python scripts/test/verify-editor-settings-ui.py",
+    "smoke:editor": "npm run smoke:editor:login && npm run smoke:editor:home && npm run smoke:editor:navigation && npm run smoke:editor:blog && npm run smoke:editor:settings",
+    "smoke:ui": "npm run smoke:public && npm run smoke:editor",
+    "data:export": "node scripts/data/export-runtime-data.mjs",
+    "data:import": "node scripts/data/import-runtime-data.mjs",
+    "data:verify": "node scripts/data/verify-runtime-data.mjs",
+    "data:backup:github": "node scripts/data/backup-to-github.mjs",
+    "data:restore:encrypted": "node scripts/data/restore-encrypted-backup.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1052.0",
+    "@smithy/node-http-handler": "^4.7.4",
+    "date-fns": "^3.6.0",
+    "lucide-react": "^0.390.0",
+    "next": "15.5.22",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "react-markdown": "^9.0.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-parse": "^11.0.0",
+    "sharp": "0.35.3",
+    "unified": "^11.0.5",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.3",
+    "@lhci/cli": "^0.15.1",
+    "@next/eslint-plugin-next": "^15.5.18",
+    "@tailwindcss/typography": "^0.5.13",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.19.19",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.4",
+    "@typescript-eslint/parser": "^8.59.4",
+    "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/coverage-v8": "^4.1.7",
+    "@vitest/ui": "^4.0.18",
+    "autoprefixer": "^10.4.19",
+    "eslint": "^9.0.0",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^28.1.0",
+    "knip": "^6.32.0",
+    "postcss": "8.5.25",
+    "postcss-load-config": "^6.0.1",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.4.0",
+    "undici": "7.29.0",
+    "vite": "^7.3.5",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.18"
+    },
+    "minimatch@10.2.4": {
+      "brace-expansion": "5.0.9"
+    },
+    "minimatch@10.2.5": {
+      "brace-expansion": "5.0.9"
+    },
+    "@vitest/ui": {
+      "flatted": "3.4.2"
+    },
+    "flat-cache": {
+      "flatted": "3.4.2"
+    },
+    "jsdom": {
+      "undici": "7.29.0"
+    },
+    "@lhci/cli": {
+      "tmp": "0.2.7",
+      "uuid": "14.0.1"
+    },
+    "esbuild": "0.28.1",
+    "postcss": "$postcss",
+    "sharp": "0.35.3"
+  }
+}

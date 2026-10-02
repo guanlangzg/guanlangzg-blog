@@ -1,0 +1,36 @@
+# Local development compose. Production uses deploy/compose.prod.yaml.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      # Public admin port 5678, bound on all interfaces by explicit decision.
+      # Plain HTTP: the admin password, session and any GitHub credentials entered
+      # in the browser can be intercepted in transit. Accepted for the first release.
+      - "0.0.0.0:${APP_PORT:-5678}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      BLOG_DATA_ROOT: /var/lib/guanlan/data
+      BLOG_SECRET_ROOT: /var/lib/guanlan/secrets
+      BLOG_BUILD_ROOT: /var/lib/guanlan/build
+      BLOG_SECRET_KEY: ${BLOG_SECRET_KEY:-}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://guanlangzg.github.io}
+      EDITOR_ACCESS_TOKEN: ${EDITOR_ACCESS_TOKEN:-}
+      COOKIE_SECURE: "false"
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      R2_BACKUP_ENABLED: ${R2_BACKUP_ENABLED:-false}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_PREFIX: ${R2_PREFIX:-blog-navigation}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_SNAPSHOT_ON_WRITE: ${R2_SNAPSHOT_ON_WRITE:-false}
+    volumes:
+      - ./data:/var/lib/guanlan/data
+      - ./secrets:/var/lib/guanlan/secrets
+      - ./build:/var/lib/guanlan/build
+    restart: unless-stopped

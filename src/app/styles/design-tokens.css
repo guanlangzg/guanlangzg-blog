@@ -1,0 +1,358 @@
+:root {
+  /* ============================================
+   * LAYER 1: CONSTANT TOKENS
+   * Raw values — never use directly in UI
+   * ============================================ */
+
+  /* Terracotta / Accent Palette */
+  --terracotta-50: #fff7f2;
+  --terracotta-100: #f8e8df;
+  --terracotta-200: #efd0c2;
+  --terracotta-300: #dda78d;
+  --terracotta-400: #ca7e5b;
+  --terracotta-500: #b85c38;
+  --terracotta-600: #9e492b;
+  --terracotta-700: #7e3924;
+  --terracotta-800: #642f22;
+  --terracotta-900: #3f2119;
+
+  /* Warm Neutral Palette */
+  --warm-50: #faf9f5;
+  --warm-100: #f5f4ed;
+  --warm-200: #efebe3;
+  --warm-300: #e0dbd0;
+  --warm-400: #cfc6b8;
+  --warm-500: #8b8378;
+  --warm-600: #5f5a54;
+  --warm-700: #3d3a35;
+  --warm-800: #2a2825;
+  --warm-900: #1a1917;
+
+  /* Cool Neutral Palette (for borders, dividers) */
+  --cool-100: #e8e6dc;
+  --cool-200: #ded7cc;
+  --cool-300: #cfc6b8;
+
+  /* Success */
+  --green-50: #effaf7;
+  --green-500: #0f8a72;
+  --green-600: #0b725e;
+
+  /* Link / Focus */
+  --blue-500: #2563eb;
+  --blue-600: #1d4ed8;
+
+  /* Warning */
+  --amber-500: #eab308;
+  --amber-600: #ca8a04;
+
+  /* Danger */
+  --red-500: #ef4444;
+  --red-600: #dc2626;
+
+  /* Navigation Category Colors */
+  --nav-purple: #6d5bd0;
+  --nav-cyan: #0e7490;
+  --nav-green: #0f766e;
+
+  /* Terminal */
+  --terminal-green: #0f8a72;
+  --terminal-terracotta: #b85c38;
+
+  /* Mac Window Buttons */
+  --mac-red: #ff5f56;
+  --mac-yellow: #ffbd2e;
+  --mac-green: #27c93f;
+
+  /* ============================================
+   * LAYER 2: SEMANTIC TOKENS
+   * Primary interface tokens — use these
+   * ============================================ */
+
+  /* Surfaces */
+  --bg: #f7f8f5;
+  --surface: #fbfbf8;
+  --surface-elevated: #ffffff;
+
+  /* Text */
+  --fg: var(--warm-900);
+  --muted: var(--warm-600);
+  --subtle: var(--warm-600);
+
+  /* Borders */
+  --border: #e3e6de;
+  --border-soft: #eef0ea;
+  --border-focus: var(--blue-500);
+
+  /* Accent — single primary accent */
+  --accent: var(--terracotta-500);
+  --accent-soft: var(--terracotta-400);
+  --accent-fg: #ffffff;
+
+  /* Semantic Colors — status only */
+  --success: var(--green-500);
+  --success-light: #bfe5dc;
+  --warning: var(--amber-500);
+  --warning-bg: #fff7d6;
+  --warning-fg: #6f3f00;
+  --warning-light: #f3c35c;
+  --danger: var(--red-500);
+  --danger-light: #fecaca;
+  --danger-bg: #fef2f2;
+
+  /* Link */
+  --link: var(--blue-500);
+  --link-hover: var(--blue-600);
+  --link-light: #bfdbfe;
+
+  /* Focus */
+  --focus: #3898ec;
+
+  /* Selection */
+  --selection-bg: var(--terracotta-700);
+  --selection-fg: #ffffff;
+
+  /* ============================================
+   * LAYER 3: CONTEXTUAL TOKENS
+   * Component-specific — derived from semantic
+   * ============================================ */
+
+  /* Card */
+  --card-bg: var(--surface);
+  --card-border: var(--border);
+  --card-radius: 8px;
+  --card-padding: 18px;
+  --card-padding-sm: 12px;
+  --card-shadow: none;
+  --card-shadow-hover: 0 8px 24px rgba(26, 25, 23, 0.07);
+
+  /* Button */
+  --button-radius: 6px;
+  --button-shadow: none;
+
+  /* Input */
+  --input-radius: 6px;
+  --input-bg: var(--surface);
+  --input-border: var(--border);
+
+  /* Badge */
+  --badge-radius: 9999px;
+  --badge-bg: var(--warm-200);
+  --badge-fg: var(--warm-600);
+
+  /* Header */
+  --header-height: 56px;
+  --header-bg: rgba(247, 248, 245, 0.9);
+  --header-border: var(--border);
+  --header-shadow: 0 1px 0 rgba(26, 25, 23, 0.06);
+
+  /* Section */
+  --section-gap: 40px;
+  --section-gap-sm: 28px;
+
+  /* ============================================
+   * SPACING SYSTEM (8px base)
+   * ============================================ */
+  --space-0: 0;
+  --space-px: 1px;
+  --space-0-5: 0.125rem;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+  --space-4xl: 6rem;
+  --space-5xl: 8rem;
+
+  --space-gap: 1rem;
+  --space-gap-sm: 0.5rem;
+  --space-gap-lg: 1.5rem;
+
+  /* ============================================
+   * CONTAINER WIDTHS
+   * ============================================ */
+  --container-sm: 640px;
+  --container-md: 768px;
+  --container-lg: 1024px;
+  --container-xl: 1200px;
+  --container-2xl: 1536px;
+  --container-content: 720px;
+  --container-wide: 1200px;
+
+  /* ============================================
+   * BORDER RADIUS
+   * ============================================ */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+
+  /* ============================================
+   * SHADOWS
+   * ============================================ */
+  --shadow-sm: 0 1px 2px rgba(26, 25, 23, 0.04);
+  --shadow-md: 0 4px 8px rgba(26, 25, 23, 0.06);
+  --shadow-lg: 0 8px 24px rgba(26, 25, 23, 0.08);
+
+  /* ============================================
+   * TRANSITIONS
+   * ============================================ */
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+
+  --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  --transition-colors: color var(--duration-fast) var(--ease-default),
+                       background-color var(--duration-fast) var(--ease-default),
+                       border-color var(--duration-fast) var(--ease-default);
+  --transition-shadow: box-shadow var(--duration-normal) var(--ease-out);
+  --transition-transform: transform var(--duration-normal) var(--ease-out);
+
+  /* ============================================
+   * TYPOGRAPHY
+   * ============================================ */
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --font-sans: var(--font-ibm-plex), 'Microsoft YaHei', 'Noto Sans CJK SC', 'PingFang SC', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-serif: Georgia, 'Noto Serif CJK SC', 'Source Serif 4', serif;
+
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 1.875rem;
+  --font-size-4xl: 2.25rem;
+  --font-size-5xl: 3rem;
+
+  --line-height-none: 1;
+  --line-height-tight: 1.2;
+  --line-height-snug: 1.375;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.625;
+  --line-height-loose: 2;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --letter-spacing-tight: 0;
+  --letter-spacing-normal: 0;
+  --letter-spacing-wide: 0.02em;
+  --letter-spacing-caps: 0.06em;
+
+  /* ============================================
+   * Z-INDEX SCALE
+   * ============================================ */
+  --z-dropdown: 1000;
+  --z-sticky: 1020;
+  --z-fixed: 1030;
+  --z-overlay: 1040;
+  --z-modal: 1050;
+  --z-popover: 1060;
+  --z-tooltip: 1070;
+
+  /* ============================================
+   * BREAKPOINTS (reference only)
+   * ============================================ */
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 1024px;
+  --bp-xl: 1200px;
+  --bp-2xl: 1536px;
+}
+
+.dark {
+    --terracotta-50: #2d1f19;
+    --terracotta-100: #3f291f;
+    --terracotta-200: #6f412d;
+    --terracotta-300: #d9997e;
+    --terracotta-400: #d18465;
+    --terracotta-500: #d06f48;
+    --terracotta-600: #e09675;
+    --terracotta-700: #e8ad93;
+    --terracotta-800: #f0c3ae;
+    --terracotta-900: #f7d8c9;
+
+    --warm-50: #171513;
+    --warm-100: #24211d;
+    --warm-200: #2c2924;
+    --warm-300: #38342e;
+    --warm-400: #4a443c;
+    --warm-500: #93887b;
+    --warm-600: #c8beb0;
+    --warm-700: #ddd5ca;
+    --warm-800: #eee8df;
+    --warm-900: #f8f3eb;
+
+    --cool-100: #2c302d;
+    --cool-200: #383d38;
+    --cool-300: #4b524b;
+
+    --green-50: #0d2d27;
+    --green-500: #5fd0ba;
+    --green-600: #8fe0cf;
+
+    --blue-500: #93c5fd;
+    --blue-600: #bfdbfe;
+
+    --amber-500: #facc15;
+    --amber-600: #fde047;
+
+    --red-500: #f87171;
+    --red-600: #fca5a5;
+
+    --bg: #141311;
+    --surface: #1d1b18;
+    --surface-elevated: #24211d;
+
+    --fg: var(--warm-900);
+    --muted: var(--warm-600);
+    --subtle: var(--warm-500);
+
+    --border: #38342e;
+    --border-soft: #2c2924;
+    --border-focus: var(--blue-500);
+
+    --accent: var(--terracotta-400);
+    --accent-soft: var(--terracotta-300);
+    --accent-fg: #1a1917;
+
+    --success-light: #135e50;
+    --warning-bg: #3a2f12;
+    --warning-fg: #f7d66f;
+    --warning-light: #806414;
+    --danger-light: #6f2424;
+    --danger-bg: #3a1a16;
+
+    --link: var(--blue-500);
+    --link-hover: var(--blue-600);
+    --link-light: #1d4f86;
+
+    --focus: #93c5fd;
+
+    --card-bg: var(--surface);
+    --card-border: var(--border);
+    --card-shadow-hover: 0 10px 28px rgba(0, 0, 0, 0.28);
+
+    --input-bg: var(--surface);
+    --input-border: var(--border);
+
+    --badge-bg: var(--warm-200);
+    --badge-fg: var(--warm-600);
+
+    --header-bg: rgba(20, 19, 17, 0.88);
+    --header-border: var(--border);
+    --header-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.24);
+    --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.28);
+}

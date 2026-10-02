@@ -1,0 +1,121 @@
+[
+  {
+    "name": "常用入口",
+    "icon": "link",
+    "slug": "quick-access",
+    "tools": [
+      {
+        "icon": "link",
+        "title": "GitHub",
+        "description": "代码托管与开源协作入口，用于管理项目、Issue、Pull Request 和 Actions",
+        "url": "https://github.com",
+        "tags": ["代码", "开源", "协作"]
+      },
+      {
+        "icon": "link",
+        "title": "QQ 邮箱",
+        "description": "常用邮箱服务入口，用于收发通知、验证码和项目相关邮件",
+        "url": "https://mail.qq.com",
+        "tags": ["邮箱", "通知"]
+      }
+    ]
+  },
+  {
+    "name": "开发文档",
+    "icon": "blog",
+    "slug": "developer-docs",
+    "tools": [
+      {
+        "icon": "blog",
+        "title": "MDN Web Docs",
+        "description": "Web 平台权威文档，覆盖 HTML、CSS、JavaScript 和浏览器 API",
+        "url": "https://developer.mozilla.org",
+        "tags": ["文档", "Web", "参考"]
+      },
+      {
+        "icon": "blog",
+        "title": "TypeScript",
+        "description": "TypeScript 官方文档入口，用于查询类型系统、配置和语言特性",
+        "url": "https://www.typescriptlang.org",
+        "tags": ["语言", "类型", "文档"]
+      }
+    ]
+  },
+  {
+    "name": "前端工具",
+    "icon": "responsive",
+    "slug": "frontend-tools",
+    "tools": [
+      {
+        "icon": "responsive",
+        "title": "Vue.js",
+        "description": "渐进式前端框架文档入口，用于查询 Composition API 和生态实践",
+        "url": "https://vuejs.org",
+        "tags": ["框架", "前端"]
+      },
+      {
+        "icon": "responsive",
+        "title": "Tailwind CSS",
+        "description": "实用优先 CSS 框架文档入口，用于查询工具类、主题和响应式规则",
+        "url": "https://tailwindcss.com",
+        "tags": ["样式", "CSS", "前端"]
+      },
+      {
+        "icon": "responsive",
+        "title": "Vite",
+        "description": "前端构建工具文档入口，用于查询开发服务器、插件和构建配置",
+        "url": "https://vitejs.dev",
+        "tags": ["构建", "前端"]
+      }
+    ]
+  },
+  {
+    "name": "写作知识",
+    "icon": "idea",
+    "slug": "writing-knowledge",
+    "tools": [
+      {
+        "icon": "idea",
+        "title": "语雀",
+        "description": "云端知识库和文档协作工具，用于沉淀文章草稿、笔记和项目资料",
+        "url": "https://www.yuque.com",
+        "tags": ["文档", "笔记", "协作"]
+      },
+      {
+        "icon": "idea",
+        "title": "Notion",
+        "description": "一体化工作空间，用于整理笔记、任务、资料库和长期知识资产",
+        "url": "https://www.notion.so",
+        "tags": ["笔记", "知识库", "任务"]
+      },
+      {
+        "icon": "idea",
+        "title": "freeCodeCamp",
+        "description": "免费编程学习平台，适合系统复习前端、后端和算法基础",
+        "url": "https://www.freecodecamp.org",
+        "tags": ["学习", "编程"]
+      }
+    ]
+  },
+  {
+    "name": "数据检索",
+    "icon": "search",
+    "slug": "data-research",
+    "tools": [
+      {
+        "icon": "search",
+        "title": "NCBI",
+        "description": "生物医学与生命科学数据库入口，用于检索文献、序列和研究数据",
+        "url": "https://www.ncbi.nlm.nih.gov",
+        "tags": ["数据库", "研究"]
+      },
+      {
+        "icon": "search",
+        "title": "GEO",
+        "description": "基因表达数据仓库入口，用于检索公开表达谱和测序数据集",
+        "url": "https://www.ncbi.nlm.nih.gov/geo/",
+        "tags": ["数据库", "基因"]
+      }
+    ]
+  }
+]

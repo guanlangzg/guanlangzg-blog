@@ -1,0 +1,12 @@
+@import './styles/design-tokens.css';
+@import './styles/markdown-preview.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light dark; }
+body { color: var(--fg); background: var(--bg); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+::selection { background: var(--selection-bg); color: var(--selection-fg); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; } }

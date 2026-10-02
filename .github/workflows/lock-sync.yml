@@ -1,0 +1,30 @@
+name: lock-sync
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm install --package-lock-only --no-audit
+      - name: Commit the regenerated lock when the linux graph added entries
+        run: |
+          if git diff --quiet package-lock.json; then
+            echo "lock already covers the linux graph"
+          else
+            git config user.name "242282218"
+            git config user.email "99485603+242282218@users.noreply.github.com"
+            git commit -am "chore: 补全 linux 平台可选依赖锁条目（@emnapi/@oxc wasm 绑定）"
+            git push
+          fi

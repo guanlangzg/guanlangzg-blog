@@ -1,0 +1,25 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/app/**/*.{ts,tsx}",
+    "src/public-site/**/*.{ts,tsx}",
+    "scripts/**/*.{mjs,ts}"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}",
+    "src/**/*.css",
+    "scripts/**/*.{ts,mjs}",
+    "tests/**/*.{ts,tsx}"
+  ],
+  "include": [
+    "files",
+    "dependencies",
+    "devDependencies",
+    "unlisted",
+    "duplicates"
+  ],
+  "ignoreDependencies": [
+    "@lhci/cli",
+    "undici"
+  ]
+}
