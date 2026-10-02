@@ -140,6 +140,16 @@
 - **口令统一校验**：`isValidEditorSecretShape` 共享长度及禁用词规则；运行时初始化、改密、setup 路由、runtime-config 路由均调用；API 错误文案统一为"编辑口令不符合安全要求。"
 - **验证结果**：聚焦回归 70 项通过；全量 Vitest 117 文件 916 项通过；lint、typecheck、deadcode、`git diff --check` 均通过；`test:release` 19/19 通过。
 
+## 2026-10-02 恢复 VPS 公开博客入口（决策变更）
+
+- 症状与根因：`http://114.55.25.190:5678/` 307 跳 `/editor/login?next=%2Feditor`，看起来像"公开展示功能被删"。实为 `src/lib/vps-access-policy.ts` 的 `classifyVpsRequest` 刻意拦截：只有 `/editor/login`、`/setup`、`/api`、`/_next`、品牌图匿名放行，其余公开路径无 `previewRelease` 时一律 blocked。`src/middleware.ts` 文档注释也写明"reader content only exists on GitHub Pages or inside a version-bound preview"。原始动态公开页与页头 `:admin`（`ADMIN_SHORTCUT = ':admin'`，`CommandInput`/`useCommandAdminMenu`）代码一直在，只是被拦。
+- 判断"原版设计"的证据：`scripts/test/verify-public-ui.py`（`npm run smoke:public`，默认 `http://127.0.0.1:3210`）验证 `/`、`/blog`、`/posts/2026-05-25-getting-started`、`/navigation` 和页头 `aria-label="搜索文章和链接"`（即 `CommandInput`），说明公开站本就该由应用本体同源提供。
+- 改动：`classifyVpsRequest` 在 `previewRelease === null` 时对公开阅读路径返回 `allow`：`/`、`/blog`、`/blog/*`、`/posts/*`、`/navigation`、`/navigation/*`，以及 `/feed.xml`、`/sitemap.xml`、`/robots.txt`、`/og`。带 `previewRelease` 时仍走封存产物预览，管理员预览流程不变。公开页只渲染 `isPublicArticleStatus`（即 `status !== 'draft'`）的文章（`src/lib/markdown.ts` 的 `getRuntimePostsAsync` 已过滤）。
+- 同步更新的测试：`tests/app/vps-access-policy.test.ts`、`tests/app/editor-middleware.test.ts`（原 "no longer serves the legacy dynamic reader pages from the VPS" 用例改为断言匿名 200）、`tests/app/preview-routing.test.ts`（原匿名跳登录/401 用例改为 200）。
+- 验证方式（本机）：`npm run build` 通过；`npx vitest run --maxWorkers=2` 全量 **117 文件 / 920 项通过**；`npm run lint`、`npm run typecheck` 通过。端到端：`npx next dev --port 3210`（配临时 `BLOG_DATA_ROOT`）后匿名 curl —— `/`、`/blog`、`/navigation`、`/posts/2026-05-25-getting-started`、`/feed.xml`、`/sitemap.xml`、`/robots.txt` 均 200，`/editor`、`/editor/blog` 仍 307 跳登录，`/media/...` 仍 401。
+- 已知限制：`/media/*`（`src/app/media/[...path]/route.ts`）仍要求 `ensureEditorSession`，正文引用 `/media/...` 的图片对匿名读者 401；公开页读工作副本而非封存产物。真实 VPS 仍是旧镜像，需重建镜像后 `docker compose ... up -d --force-recreate app` 才生效。
+- 本机 `npm run start`（standalone）在本机直接崩溃（exit 3221226505），改用 `npx next dev` 完成端到端验证；standalone 启动问题未排查。
+
 ## 环境备忘
 
 - 本会话并行派发子代理审查时，同时 5 个会有 3 个报 `user concurrency limit exceeded`，2-3 个并发可稳定运行；重试即可补齐。

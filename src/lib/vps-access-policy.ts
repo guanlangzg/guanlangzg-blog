@@ -23,6 +23,22 @@ const PUBLIC_RESOURCE_PATHS = new Set([
     'sitemap.xml',
 ]);
 
+/**
+ * Reader routes the VPS serves anonymously. This keeps the original single-host behaviour: the
+ * public blog and the editor share one origin, and readers open the editor through the `:admin`
+ * command in the header search instead of a separate admin host. Only paths the dynamic app
+ * actually renders are listed, so static-only routes stay behind the login page.
+ */
+const PUBLIC_READER_DOCUMENT_PATHS = new Set(['/', '/blog', '/navigation']);
+const PUBLIC_READER_DOCUMENT_PREFIXES = ['/blog/', '/posts/', '/navigation/'];
+const PUBLIC_READER_RESOURCE_PATHS = new Set(['/feed.xml', '/sitemap.xml', '/robots.txt', '/og']);
+
+function isPublicReaderPath(pathname: string): boolean {
+    if (PUBLIC_READER_DOCUMENT_PATHS.has(pathname)) return true;
+    if (PUBLIC_READER_DOCUMENT_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
+    return PUBLIC_READER_RESOURCE_PATHS.has(pathname);
+}
+
 export type VpsRequestDecision =
     | { kind: 'allow' }
     | { kind: 'editor' }
@@ -63,9 +79,10 @@ function resolveArtifactPath(segments: string[], isDocument: boolean, isRscReque
 }
 
 /**
- * Single source of truth for what the VPS may serve. Only the login page, setup, management
- * assets and brand files are anonymous; every public content path must resolve to a sealed
- * artifact of an explicitly named release, never to the live working copy.
+ * Single source of truth for what the VPS may serve. The login page, setup, management assets,
+ * brand files and the reader site are anonymous; any other content path must resolve to a sealed
+ * artifact of an explicitly named release, never to the live working copy. The reader pages are
+ * rendered dynamically from the working copy but only ever expose non-draft articles.
  */
 export function classifyVpsRequest(input: VpsRequestInput): VpsRequestDecision {
     const { pathname } = input;
@@ -100,7 +117,9 @@ export function classifyVpsRequest(input: VpsRequestInput): VpsRequestDecision {
     // for the same route must fail closed instead of following a login redirect.
     const target: 'document' | 'resource' = isDocument && !input.isRscRequest ? 'document' : 'resource';
 
-    if (input.previewRelease === null) return { kind: 'blocked', target };
+    if (input.previewRelease === null) {
+        return isPublicReaderPath(pathname) ? { kind: 'allow' } : { kind: 'blocked', target };
+    }
     if (!RELEASE_ID_PATTERN.test(input.previewRelease)) return { kind: 'blocked', target };
 
     return {

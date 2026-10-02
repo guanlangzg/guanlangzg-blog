@@ -42,50 +42,62 @@ afterEach(() => {
 });
 
 describe('VPS content boundary', () => {
-  it('sends an anonymous reader page request to the login page', () => {
+  it('serves an anonymous reader page request on the same origin as the editor', () => {
     const response = middleware(createRequest('/'));
 
-    expect(response.status).toBe(307);
-    expect(response.headers.get('location')).toBe('http://localhost/editor/login?next=%2Feditor');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('location')).toBeNull();
     expect(rewriteTarget(response)).toBeNull();
   });
 
-  it('sends a signed-in admin to the management entry instead of the old dynamic page', () => {
-    for (const pathname of ['/', '/blog', '/navigation', '/search', '/posts/%E4%B8%AD%E6%96%87']) {
+  it('serves reader pages to a signed-in admin instead of bouncing them to the editor', () => {
+    for (const pathname of ['/', '/blog', '/navigation', '/posts/%E4%B8%AD%E6%96%87']) {
       const response = middleware(createRequest(pathname, { session: 'opaque-session' }));
 
-      expect(response.status, pathname).toBe(307);
-      expect(response.headers.get('location'), pathname).toBe('http://localhost/editor');
+      expect(response.status, pathname).toBe(200);
+      expect(response.headers.get('location'), pathname).toBeNull();
     }
   });
 
-  it('refuses anonymous public resources with 401 and no working-copy bytes', () => {
-    for (const pathname of ['/feed.xml', '/sitemap.xml', '/robots.txt', '/og', '/media/files/2026/01/a.png']) {
+  it('still sends a signed-in admin to the management entry for unrendered documents', () => {
+    const response = middleware(createRequest('/search', { session: 'opaque-session' }));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('http://localhost/editor');
+  });
+
+  it('serves anonymous public resources and still refuses media working-copy bytes', () => {
+    for (const pathname of ['/feed.xml', '/sitemap.xml', '/robots.txt', '/og']) {
       const response = middleware(createRequest(pathname));
 
-      expect(response.status, pathname).toBe(401);
-      expect(response.headers.get('cache-control'), pathname).toBe('private, no-store');
+      expect(response.status, pathname).toBe(200);
       expect(rewriteTarget(response), pathname).toBeNull();
     }
+
+    const media = middleware(createRequest('/media/files/2026/01/a.png'));
+
+    expect(media.status).toBe(401);
+    expect(media.headers.get('cache-control')).toBe('private, no-store');
+    expect(rewriteTarget(media)).toBeNull();
   });
 
-  it('refuses prefetch and RSC navigation without a release instead of redirecting', () => {
+  it('serves prefetch and RSC reader navigation anonymously instead of redirecting', () => {
     const prefetch = middleware(createRequest('/blog', { headers: { 'next-router-prefetch': '1' } }));
     const rsc = middleware(createRequest('/blog', { headers: { RSC: '1' } }));
 
-    expect(prefetch.status).toBe(401);
-    expect(rsc.status).toBe(401);
+    expect(prefetch.status).toBe(200);
+    expect(rsc.status).toBe(200);
     expect(rewriteTarget(prefetch)).toBeNull();
     expect(rewriteTarget(rsc)).toBeNull();
   });
 
-  it('still refuses prefetch requests that carry a session but no release id', () => {
+  it('serves a prefetch request that carries a session but no release id', () => {
     const response = middleware(createRequest('/blog', {
       session: 'opaque-session',
       headers: { purpose: 'prefetch', 'next-router-prefetch': '1' },
     }));
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
     expect(rewriteTarget(response)).toBeNull();
   });
 

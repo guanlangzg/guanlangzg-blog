@@ -37,22 +37,31 @@ describe('VPS access policy', () => {
     expect(classify('/api/editor/releases')).toEqual({ kind: 'allow' });
   });
 
-  it('blocks public documents that carry no preview release', () => {
-    expect(classify('/')).toEqual({ kind: 'blocked', target: 'document' });
-    expect(classify('/blog')).toEqual({ kind: 'blocked', target: 'document' });
-    expect(classify('/posts/%E4%B8%AD%E6%96%87')).toEqual({ kind: 'blocked', target: 'document' });
-    expect(classify('/navigation/')).toEqual({ kind: 'blocked', target: 'document' });
-    expect(classify('/search')).toEqual({ kind: 'blocked', target: 'document' });
+  it('serves the reader pages anonymously on the VPS', () => {
+    for (const pathname of ['/', '/blog', '/blog/', '/posts/%E4%B8%AD%E6%96%87', '/navigation', '/navigation/']) {
+      expect(classify(pathname), pathname).toEqual({ kind: 'allow' });
+    }
   });
 
-  it('blocks public resources, legacy media and OG images as resources', () => {
-    for (const pathname of ['/feed.xml', '/sitemap.xml', '/robots.txt', '/og', '/media/files/2026/01/abc.png']) {
+  it('keeps unrendered public documents behind the login page', () => {
+    expect(classify('/search')).toEqual({ kind: 'blocked', target: 'document' });
+    expect(classify('/manifest.webmanifest')).toEqual({ kind: 'blocked', target: 'resource' });
+  });
+
+  it('serves public feeds, sitemap, robots and OG images anonymously', () => {
+    for (const pathname of ['/feed.xml', '/sitemap.xml', '/robots.txt', '/og']) {
+      expect(classify(pathname), pathname).toEqual({ kind: 'allow' });
+    }
+  });
+
+  it('still blocks media and other unlisted resources as resources', () => {
+    for (const pathname of ['/media/files/2026/01/abc.png', '/llms.txt', '/search-index.json']) {
       expect(classify(pathname), pathname).toEqual({ kind: 'blocked', target: 'resource' });
     }
   });
 
-  it('treats RSC and prefetch document requests as resources so they never redirect', () => {
-    expect(classify('/blog', { rsc: true })).toEqual({ kind: 'blocked', target: 'resource' });
+  it('serves RSC and prefetch reader requests anonymously so client navigation works', () => {
+    expect(classify('/blog', { rsc: true })).toEqual({ kind: 'allow' });
   });
 
   it('maps a preview document request to the sealed index page of that release', () => {

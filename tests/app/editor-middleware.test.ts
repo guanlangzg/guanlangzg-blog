@@ -153,14 +153,21 @@ describe('editor middleware', () => {
     expect(csp).toContain("style-src 'self' 'unsafe-inline'");
   });
 
-  it('no longer serves the legacy dynamic reader pages from the VPS', () => {
+  it('serves the reader pages anonymously on the same origin as the editor', () => {
     const anonymous = middleware(createEditorRequest('/blog'));
     const signedIn = middleware(createEditorRequest('/blog', 'opaque-session'));
 
-    expect(anonymous.status).toBe(307);
-    expect(anonymous.headers.get('location')).toContain('/editor/login');
-    expect(signedIn.status).toBe(307);
-    expect(signedIn.headers.get('location')).toBe('http://localhost/editor');
+    expect(anonymous.status).toBe(200);
+    expect(anonymous.headers.get('location')).toBeNull();
+    expect(signedIn.status).toBe(200);
+    expect(signedIn.headers.get('location')).toBeNull();
+  });
+
+  it('still protects editor documents behind the session', () => {
+    const response = middleware(createEditorRequest('/editor/blog'));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toContain('/editor/login');
   });
 
   it('keeps setup on nonce CSP because it is a configuration page', () => {
