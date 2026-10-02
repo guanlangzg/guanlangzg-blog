@@ -62,7 +62,8 @@ RUN apk add --no-cache curl su-exec libc6-compat && \
     adduser --system --uid 1001 nextjs && \
     mkdir -p /home/nextjs /tmp /var/lib/guanlan/data /var/lib/guanlan/secrets /var/lib/guanlan/build \
         /app/management/.next/cache /app/management/src/lib /app/management/scripts/admin \
-        /app/management/scripts/runtime /app/scripts/public-site \
+        /app/management/scripts/runtime /app/management/public \
+        /app/scripts/public-site \
         /app/management/content/seeds /app/src/lib/public-build \
         /app/src/public-site /app/src/public-site/app /app/src/public-site/app/blog \
         /app/src/public-site/app/blog/[...slug] /app/src/public-site/app/navigation \
