@@ -152,6 +152,36 @@ describe('setup API R2 flow', () => {
     );
   });
 
+  it('rejects a forbidden weak password during first setup before saving configuration', async () => {
+    clearRuntimeEnv();
+    const dataRoot = createTempDataRoot();
+    vi.stubEnv('NODE_ENV', 'production');
+    process.env.EDITOR_RUNTIME_AUTH_SETUP_TOKEN = 'setup-token';
+    process.env.TRUSTED_PROXY_IPS = '*';
+
+    const response = await PUT(createSetupRequest({
+      ...createBaseSetupBody(dataRoot),
+      editorSecret: '123456789012',
+      confirmEditorSecret: '123456789012',
+      setupToken: 'setup-token',
+      r2SetupMode: 'disabled',
+      r2Settings: {
+        enabled: false,
+        accountId: '',
+        bucket: '',
+        accessKeyId: '',
+        secretAccessKey: '',
+        prefix: 'blog-navigation',
+        endpoint: '',
+        snapshotOnWrite: false,
+      },
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ message: '编辑口令不符合安全要求。' });
+    expect(fs.existsSync(path.join(dataRoot, 'settings', 'editor-auth.json'))).toBe(false);
+  });
+
   it('allows first setup in production when a setup token is configured', async () => {
     clearRuntimeEnv();
     const dataRoot = createTempDataRoot();

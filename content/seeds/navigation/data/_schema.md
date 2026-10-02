@@ -1,8 +1,8 @@
 # 导航数据 Schema 规范
 
-> **文件版本**：2026-03  
-> **数据文件路径**：`content/seeds/navigation/data/tools.json`  
-> **维护说明**：每次修改 `tools.json` 结构时，同步更新本文档  
+> **文件版本**：2026-03
+> **数据文件路径**：`content/seeds/navigation/data/tools.json`
+> **维护说明**：每次修改 `tools.json` 结构时，同步更新本文档
 
 ---
 

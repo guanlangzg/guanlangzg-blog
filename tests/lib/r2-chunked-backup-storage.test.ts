@@ -30,9 +30,11 @@ const ORIGINAL_ENV = {
   R2_ENDPOINT: process.env.R2_ENDPOINT,
 };
 const tempDirectories: string[] = [];
-const objects = new Map<string, { body: string | Uint8Array; contentType?: string }>();
+const objects = new Map<string, { body: string | Uint8Array; contentType?: string; etag: string }>();
 const sentCommands: Array<GetObjectCommand | HeadObjectCommand | PutObjectCommand> = [];
 let failPutKeyPattern: RegExp | null = null;
+let beforeLatestPut: (() => Promise<void>) | null = null;
+let latestPutCount = 0;
 
 function normalizeMockBody(body: unknown): string | Uint8Array {
   if (typeof body === 'string') {
@@ -67,12 +69,28 @@ vi.mock('@aws-sdk/client-s3', async () => {
               throw new Error(`Injected PUT failure for ${key}`);
             }
 
+            if (key.endsWith('/v2/latest.json')) {
+              latestPutCount += 1;
+              await beforeLatestPut?.();
+            }
+
+            const current = objects.get(key);
+            if (command.input.IfNoneMatch === '*' && current) {
+              throw new actual.S3ServiceException({ name: 'PreconditionFailed', $fault: 'client', $metadata: { httpStatusCode: 412 } });
+            }
+            if (command.input.IfMatch && current?.etag !== command.input.IfMatch) {
+              throw new actual.S3ServiceException({ name: 'PreconditionFailed', $fault: 'client', $metadata: { httpStatusCode: 412 } });
+            }
+
+            const body = normalizeMockBody(command.input.Body);
+            const etag = `"${Buffer.from(body).toString('base64')}"`;
             objects.set(key, {
-              body: normalizeMockBody(command.input.Body),
+              body,
               contentType: command.input.ContentType,
+              etag,
             });
 
-            return {};
+            return { ETag: etag };
           }
 
           if (command instanceof actual.GetObjectCommand) {
@@ -91,6 +109,7 @@ vi.mock('@aws-sdk/client-s3', async () => {
             return {
               Body: object.body,
               ContentType: object.contentType,
+              ETag: object.etag,
               ContentLength: object.body instanceof Uint8Array
                 ? object.body.byteLength
                 : Buffer.byteLength(object.body, 'utf8'),
@@ -113,6 +132,7 @@ vi.mock('@aws-sdk/client-s3', async () => {
             }
 
             return {
+              ETag: object.etag,
               ContentLength: object.body instanceof Uint8Array
                 ? object.body.byteLength
                 : Buffer.byteLength(object.body, 'utf8'),
@@ -228,6 +248,8 @@ beforeEach(() => {
   objects.clear();
   sentCommands.length = 0;
   failPutKeyPattern = null;
+  beforeLatestPut = null;
+  latestPutCount = 0;
   vi.mocked(S3Client).mockClear();
 });
 
@@ -355,6 +377,73 @@ describe('R2 v2 chunked backup storage', () => {
       failed: 1,
       failures: [expect.objectContaining({ path: mediaPath })],
     });
+  });
+
+  it('does not let an older upload replace a newer latest pointer', async () => {
+    let signalFirstLatest!: () => void;
+    let releaseFirstLatest!: () => void;
+    const firstLatestReached = new Promise<void>((resolve) => { signalFirstLatest = resolve; });
+    const firstLatestGate = new Promise<void>((resolve) => { releaseFirstLatest = resolve; });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-02T12:00:00.000Z'));
+    beforeLatestPut = async () => {
+      if (latestPutCount === 1) {
+        signalFirstLatest();
+        await firstLatestGate;
+      }
+    };
+
+    const olderUpload = uploadChunkedBackupToR2(createPackage(['Older']), {
+      reason: 'manual-sync',
+      writeSnapshot: true,
+    });
+    await firstLatestReached;
+    vi.setSystemTime(new Date('2026-10-02T12:00:02.000Z'));
+    const newer = await uploadChunkedBackupToR2(createPackage(['Newer']), {
+      reason: 'manual-sync',
+      writeSnapshot: true,
+    });
+    releaseFirstLatest();
+    await olderUpload;
+    vi.useRealTimers();
+
+    const latestKey = createChunkedBackupFullKeyForTests({
+      bucket: 'blog-data',
+      endpoint: 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      accessKeyId: 'access-key',
+      secretAccessKey: 'secret-key',
+      prefix: 'blog-navigation',
+      snapshotOnWrite: false,
+    }, 'v2/latest.json');
+    const latest = JSON.parse(String(objects.get(latestKey)?.body)) as { snapshotId: string };
+
+    expect(latest.snapshotId).toBe(newer.snapshotId);
+  });
+
+  it('uses the snapshot ID as a deterministic tie-breaker for identical timestamps', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-02T12:00:00.000Z'));
+    const first = await uploadChunkedBackupToR2(createPackage(['First']), {
+      reason: 'manual-sync',
+      writeSnapshot: true,
+    });
+    const second = await uploadChunkedBackupToR2(createPackage(['Second']), {
+      reason: 'manual-sync',
+      writeSnapshot: true,
+    });
+    vi.useRealTimers();
+
+    const latestKey = createChunkedBackupFullKeyForTests({
+      bucket: 'blog-data',
+      endpoint: 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      accessKeyId: 'access-key',
+      secretAccessKey: 'secret-key',
+      prefix: 'blog-navigation',
+      snapshotOnWrite: false,
+    }, 'v2/latest.json');
+    const latest = JSON.parse(String(objects.get(latestKey)?.body)) as { snapshotId: string };
+
+    expect(latest.snapshotId).toBe([first.snapshotId, second.snapshotId].sort().at(-1));
   });
 
   it('does not write the latest pointer when immutable object upload fails', async () => {

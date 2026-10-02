@@ -304,7 +304,7 @@ describe('runtime setup and config APIs', () => {
     const payload = await setupResponse.json();
 
     expect(setupResponse.status).toBe(400);
-    expect(payload).toEqual({ message: '编辑口令至少需要 12 个字符。' });
+    expect(payload).toEqual({ message: '编辑口令不符合安全要求。' });
     expect(cloudflareFetch).not.toHaveBeenCalled();
   });
 
@@ -346,6 +346,32 @@ describe('runtime setup and config APIs', () => {
     );
     expect(storedSettings).not.toHaveProperty('backupEncryptionKey');
     expect(storedSettings).not.toHaveProperty('allowPlaintextBackup');
+  });
+
+  it('rejects forbidden weak replacement secrets without changing the configured secret', async () => {
+    clearRuntimeEnv();
+    process.env.BLOG_DATA_ROOT = createTempDataRoot();
+    process.env.EDITOR_ACCESS_TOKEN = 'legacy-env-secret';
+    const loginResponse = await login('legacy-env-secret');
+
+    const response = await putRuntimeConfig(await createAuthedEditorRequest('http://localhost/api/runtime-config', {
+      method: 'PUT',
+      body: JSON.stringify({
+        config: {
+          publicSiteUrl: 'https://runtime.example',
+          cookieSecure: false,
+          trustedProxyIps: '',
+          dataRootPath: process.env.BLOG_DATA_ROOT,
+        },
+        editorSecret: '123456789012',
+        confirmEditorSecret: '123456789012',
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ message: '编辑口令不符合安全要求。' });
+    expect((await login('legacy-env-secret')).status).toBe(200);
+    expect(loginResponse.status).toBe(200);
   });
 
   it('updates runtime config and makes the saved editor secret override the legacy env token', async () => {

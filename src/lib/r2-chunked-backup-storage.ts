@@ -72,6 +72,7 @@ import {
     type R2ChunkedMediaIndexItem,
     type R2ChunkedObjectReference,
     type R2ChunkedRepository,
+    type R2ChunkedLatestPointer,
     type R2ChunkedSnapshotManifest,
 } from '@/lib/r2-chunked-backup-types';
 import { parseSiteSettingsOrThrow } from '@/lib/site-settings';
@@ -220,6 +221,71 @@ async function putJsonObject(
         Body: object.body,
         ContentType: JSON_CONTENT_TYPE,
     }));
+}
+
+async function readLatestPointerForUpdate(
+    client: S3ClientLike,
+    config: R2BackupConfig
+): Promise<{ pointer: R2ChunkedLatestPointer; etag: string } | null> {
+    const key = createR2ChunkedLatestPointerKey();
+
+    try {
+        const response = await client.send(new GetObjectCommand({
+            Bucket: config.bucket,
+            Key: createFullKey(config, key),
+        }));
+        const etag = response.ETag;
+        if (typeof etag !== 'string' || !etag) {
+            throw new R2ChunkedBackupIntegrityError('R2 latest pointer has no ETag.', 'write-latest', key);
+        }
+        const text = await bodyToString(response.Body);
+        const pointer = parseR2ChunkedLatestPointer(parseJsonText(text, 'write-latest', key));
+        if (!pointer) {
+            throw new R2ChunkedBackupFormatError('R2 v2 latest pointer format is invalid.', 'write-latest', key);
+        }
+        return { pointer, etag };
+    } catch (error) {
+        if (isNoSuchKeyError(error)) return null;
+        throw error;
+    }
+}
+
+function isConditionalWriteConflict(error: unknown): boolean {
+    return error instanceof S3ServiceException && (
+        error.$metadata.httpStatusCode === 409 ||
+        error.$metadata.httpStatusCode === 412 ||
+        error.name === 'PreconditionFailed' ||
+        error.name === 'ConditionalRequestConflict'
+    );
+}
+
+async function writeLatestPointerConditionally(
+    client: S3ClientLike,
+    config: R2BackupConfig,
+    object: PreparedJsonObject<R2ChunkedLatestPointer>
+): Promise<void> {
+    const latestKey = createFullKey(config, object.reference.key);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        const current = await readLatestPointerForUpdate(client, config);
+        if (current && (
+            current.pointer.updatedAt > object.value.updatedAt ||
+            (current.pointer.updatedAt === object.value.updatedAt && current.pointer.snapshotId >= object.value.snapshotId)
+        )) return;
+
+        try {
+            await client.send(new PutObjectCommand({
+                Bucket: config.bucket,
+                Key: latestKey,
+                Body: object.body,
+                ContentType: JSON_CONTENT_TYPE,
+                ...(current ? { IfMatch: current.etag } : { IfNoneMatch: '*' }),
+            }));
+            return;
+        } catch (error) {
+            if (!isConditionalWriteConflict(error) || attempt === 4) throw error;
+        }
+    }
 }
 
 async function putMediaObject(
@@ -615,7 +681,7 @@ export async function uploadChunkedBackupToR2(
         mediaManifest: mediaManifestObject.reference,
     };
     const snapshotObject = createJsonObject(snapshotKey, snapshotManifest);
-    const latestObject = createJsonObject(createR2ChunkedLatestPointerKey(), {
+    const latestObject = createJsonObject<R2ChunkedLatestPointer>(createR2ChunkedLatestPointerKey(), {
         schemaVersion: R2_CHUNKED_BACKUP_SCHEMA_VERSION,
         kind: 'latest-pointer' as const,
         updatedAt: now.toISOString(),
@@ -644,7 +710,7 @@ export async function uploadChunkedBackupToR2(
     await putJsonObject(client, config, snapshotObject);
 
     if (writeLatest) {
-        await putJsonObject(client, config, latestObject);
+        await writeLatestPointerConditionally(client, config, latestObject);
     }
 
     return {

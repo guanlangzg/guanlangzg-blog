@@ -120,7 +120,10 @@ describe('isolated Next.js public artifact export', () => {
             'feed.xml',
             'sitemap.xml',
             'robots.txt',
+            'manifest.webmanifest',
+            'llms.txt',
             '404.html',
+            `_site/${releaseId}/favicon-32.png`,
             `_site/${releaseId}/og/静态文章.png`,
             `_site/${releaseId}/og/无封面文章.png`,
             'blog/legacy-post/index.html',
@@ -134,6 +137,8 @@ describe('isolated Next.js public artifact export', () => {
         const feed = await fs.readFile(path.join(artifactPath, 'feed.xml'), 'utf8');
         const sitemap = await fs.readFile(path.join(artifactPath, 'sitemap.xml'), 'utf8');
         const robots = await fs.readFile(path.join(artifactPath, 'robots.txt'), 'utf8');
+        const manifest = await fs.readFile(path.join(artifactPath, 'manifest.webmanifest'), 'utf8');
+        const llms = await fs.readFile(path.join(artifactPath, 'llms.txt'), 'utf8');
         expect(html).toContain('冻结文章标题');
         expect(html).toContain(`/_site/${releaseId}/media/article.png`);
         expect(search).toContain('冻结导航项');
@@ -145,6 +150,15 @@ describe('isolated Next.js public artifact export', () => {
         expect(sitemap).toContain('https://guanlangzg.github.io/posts/%E9%9D%99%E6%80%81%E6%96%87%E7%AB%A0/');
         expect(feed + sitemap + robots + search).not.toContain('draft-secret');
         expect(robots).toContain('https://guanlangzg.github.io/sitemap.xml');
+        expect(manifest).toContain(`/_site/${releaseId}/favicon-32.png`);
+        expect(llms).toContain('# 观澜志 G01');
+        expect(llms).toContain('来自冻结快照的静态公开站');
+        const sitemapEntries = sitemap.split('<url>').slice(1).map((entry) => entry.split('</url>')[0]);
+        const fixedPages = sitemapEntries.filter((entry) => entry.includes('https://guanlangzg.github.io/') && !entry.includes('/posts/'));
+        expect(fixedPages).toHaveLength(4);
+        expect(fixedPages.every((entry) => !entry.includes('<lastmod>'))).toBe(true);
+        const postEntry = sitemapEntries.find((entry) => entry.includes('/posts/%E9%9D%99%E6%80%81%E6%96%87%E7%AB%A0/'));
+        expect(postEntry).toContain('<lastmod>2026-09-30</lastmod>');
     });
 
     it('renders removed legacy paths while preserving the current blog archive', async () => {

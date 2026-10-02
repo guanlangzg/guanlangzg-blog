@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Article } from '@/app/types/article';
 import { DEFAULT_SITE_SETTINGS } from '@/lib/site-settings';
 import {
@@ -7,12 +7,19 @@ import {
   writeGitHubBackup,
   type BackupSnapshotInput,
 } from '@/lib/github/backup';
-import { decodeBackupArticle } from '@/lib/github/backup-decode';
+import { decodeBackupCommit } from '@/lib/editor-runtime/restore-backup';
+import { decodeBackupArticle, verifyBackupManifestFiles } from '@/lib/github/backup-decode';
+import { createConfiguredGitHubBackupClient } from '@/lib/github/backup-service';
+import { sha256Hex, stableJsonStringify } from '@/lib/stable-json';
 import { GitHubRestClient } from '@/lib/github/client';
 import type { GitHubRepositories } from '@/lib/github/config';
 import { createNavigationIdentityMap } from '@/lib/navigation-identities';
 import type { SiteSnapshot } from '@/lib/publishing/types';
 import { computeCandidateDigest } from '@/lib/publishing/snapshot';
+
+vi.mock('@/lib/github/backup-service', () => ({
+  createConfiguredGitHubBackupClient: vi.fn(),
+}));
 
 const repositories: GitHubRepositories = {
   source: { owner: 'owner', name: 'source', id: 10 },
@@ -195,6 +202,16 @@ function createFakeGitHub(options: { privateRepository?: boolean } = {}) {
       blobs.set(sha, new Uint8Array(bytes));
       trees.get(treeSha)?.set(filePath, sha);
     },
+    replaceFileInTree: (treeSha: string, filePath: string, bytes: Uint8Array) => {
+      const sha = gitBlobSha(bytes);
+      blobs.set(sha, new Uint8Array(bytes));
+      trees.get(treeSha)?.set(filePath, sha);
+    },
+    addCommitAlias: (sourceSha: string, aliasSha: string) => {
+      const commit = commits.get(sourceSha);
+      if (!commit) throw new Error(`Missing source commit ${sourceSha}`);
+      commits.set(aliasSha, { ...commit, parents: [] });
+    },
     advance: () => { advanceBeforePatch = true; },
     losePatchResponse: () => { loseFirstPatchResponse = true; },
   };
@@ -209,6 +226,72 @@ function clientFor(fake: ReturnType<typeof createFakeGitHub>): GitHubRestClient 
 }
 
 describe('private GitHub v1 backup', () => {
+  it('verifies manifest file bytes and content digest before restore', () => {
+    const fileBytes = new TextEncoder().encode('{"title":"Verified"}');
+    const files = {
+      'settings/site.json': { size: fileBytes.byteLength, sha256: sha256Hex(fileBytes) },
+    };
+    const manifest = {
+      schemaVersion: 1,
+      snapshotId: 'snapshot-1',
+      siteId: 'site-1',
+      reason: 'test',
+      contentSequence: 1,
+      generation: 'generation-1',
+      candidateDigest: '',
+      contentDigest: sha256Hex(stableJsonStringify(files)),
+      files,
+    };
+    const blobs = new Map([['settings/site.json', fileBytes]]);
+
+    expect(() => verifyBackupManifestFiles(manifest, blobs)).not.toThrow();
+    expect(() => verifyBackupManifestFiles(manifest, new Map())).toThrow(/missing/i);
+    expect(() => verifyBackupManifestFiles({ ...manifest, contentDigest: '0'.repeat(64) }, blobs)).toThrow(/content digest/i);
+    expect(() => verifyBackupManifestFiles({
+      ...manifest,
+      files: { 'settings/site.json': { ...files['settings/site.json'], sha256: '0'.repeat(64) } },
+      contentDigest: sha256Hex(stableJsonStringify({
+        'settings/site.json': { ...files['settings/site.json'], sha256: '0'.repeat(64) },
+      })),
+    }, blobs)).toThrow(/hash/i);
+    expect(() => verifyBackupManifestFiles({
+      ...manifest,
+      files: { 'settings/site.json': { ...files['settings/site.json'], size: fileBytes.byteLength + 1 } },
+      contentDigest: sha256Hex(stableJsonStringify({
+        'settings/site.json': { ...files['settings/site.json'], size: fileBytes.byteLength + 1 },
+      })),
+    }, blobs)).toThrow(/size/i);
+  });
+
+  it('verifies the manifest and declared file hashes on the actual restore path', async () => {
+    const fake = createFakeGitHub();
+    const proof = await writeGitHubBackup(clientFor(fake), backupInput({
+      publication: { live: null, liveSnapshot: null, candidate: null },
+    }));
+    const commit = fake.commits.get(proof.commitSha) as { treeSha: string };
+    const validCommitSha = 'a'.repeat(40);
+    fake.addCommitAlias(proof.commitSha, validCommitSha);
+    const configuredClient = clientFor(fake);
+    vi.mocked(createConfiguredGitHubBackupClient).mockResolvedValue(configuredClient);
+
+    await expect(decodeBackupCommit(validCommitSha)).resolves.toMatchObject({
+      commit: validCommitSha,
+      data: { articles: [expect.objectContaining({ id: 'article-1', content: '正文' })] },
+    });
+
+    const tree = fake.trees.get(commit.treeSha) as Map<string, string>;
+    const contentPath = `articles/${createHash('sha256').update('article-1').digest('hex')}/content.md`;
+    const contentSha = tree.get(contentPath) as string;
+    const corrupted = new TextEncoder().encode('tampered');
+    fake.addFileToTree(commit.treeSha, contentPath, corrupted);
+    await expect(decodeBackupCommit(validCommitSha)).rejects.toThrow(/size mismatch|hash mismatch/i);
+    tree.set(contentPath, contentSha);
+
+    const snapshotBytes = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, snapshotId: 'broken' }));
+    fake.replaceFileInTree(commit.treeSha, 'snapshot.json', snapshotBytes);
+    await expect(decodeBackupCommit(validCommitSha)).rejects.toThrow(/manifest/i);
+  });
+
   it('round-trips Chinese Markdown with CRLF and omitted optional fields byte-for-byte', () => {
     const original = article('article-1', '---\r\ntitle: 中文\r\ntags:\r\n  - 测试\r\n---\r\n\r\n正文\r\n');
     const encoded = encodeBackupSnapshot(backupInput({ articles: [original] }));

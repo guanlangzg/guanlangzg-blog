@@ -309,6 +309,8 @@ async function createBuildWorkspace(buildRoot, snapshot) {
         ['src/public-site/app/search-index.json/route.ts', 'src/app/search-index.json/route.ts'],
         ['src/public-site/app/feed.xml/route.ts', 'src/app/feed.xml/route.ts'],
         ['src/public-site/app/sitemap.ts', 'src/app/sitemap.ts'],
+        ['src/public-site/app/manifest.ts', 'src/app/manifest.ts'],
+        ['src/public-site/app/llms.txt/route.ts', 'src/app/llms.txt/route.ts'],
         ['src/public-site/app/robots.ts', 'src/app/robots.ts'],
         ['src/public-site/app/not-found.tsx', 'src/app/not-found.tsx'],
         ['src/public-site/app/posts/[slug]/page.tsx', 'src/app/posts/[slug]/page.tsx'],

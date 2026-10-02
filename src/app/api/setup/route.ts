@@ -28,6 +28,7 @@ import {
     isValidRuntimeEditorAuthSetupToken,
     updateRuntimeEditorAuthSecret,
 } from '@/lib/editor-auth-runtime';
+import { isValidEditorSecretShape } from '@/lib/editor-auth-password';
 import {
     clearEditorAuthFailures,
     getEditorAuthRateLimitResponse,
@@ -344,14 +345,14 @@ export async function PUT(request: NextRequest) {
         );
     }
 
-    if (editorSecret && editorSecret.length < 12) {
+    if (editorSecret && !isValidEditorSecretShape(editorSecret)) {
         if (!authConfigured) {
             recordEditorAuthFailure(request, 'setup');
         }
 
         return NextResponse.json(
             {
-                message: '编辑口令至少需要 12 个字符。',
+                message: '编辑口令不符合安全要求。',
             },
             { status: 400 }
         );
@@ -445,7 +446,7 @@ export async function PUT(request: NextRequest) {
         if (error instanceof RuntimeEditorAuthInvalidSecretError) {
             return NextResponse.json(
                 {
-                    message: '编辑口令至少需要 12 个字符。',
+                    message: '编辑口令不符合安全要求。',
                 },
                 { status: 400 }
             );

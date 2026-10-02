@@ -1,6 +1,7 @@
 import type { Article } from '@/app/types/article';
 import { isRecord, parseArticleDataOrThrow } from '@/lib/article-data';
 import { validateArticlePaths } from '@/lib/publishing/snapshot';
+import { sha256Hex, stableJsonStringify } from '@/lib/stable-json';
 
 const ARTICLE_FIELDS = new Set([
   'id', 'slug', 'title', 'date', 'description', 'tags', 'content', 'createdAt', 'updatedAt',
@@ -77,6 +78,79 @@ export function decodeBackupArticle(metadataBytes: Uint8Array, contentBytes: Uin
   const article = articleValue as unknown as Article;
   validateArticlePaths([article]);
   return article;
+}
+
+export interface BackupManifestFile {
+  size: number;
+  sha256: string;
+}
+
+export interface BackupSnapshotManifest {
+  schemaVersion: 1;
+  snapshotId: string;
+  siteId: string;
+  reason: string;
+  contentSequence: number | null;
+  generation: string | null;
+  contentDigest: string;
+  candidateDigest: string;
+  files: Record<string, BackupManifestFile>;
+}
+
+const SNAPSHOT_MANIFEST_FIELDS = new Set([
+  'schemaVersion', 'snapshotId', 'siteId', 'reason', 'contentSequence', 'generation',
+  'contentDigest', 'candidateDigest', 'files',
+]);
+const HASH_PATTERN = /^[a-f0-9]{64}$/i;
+
+export function parseBackupSnapshotManifest(value: unknown): BackupSnapshotManifest {
+  assertSupportedBackupSchema(value, 'snapshot.json');
+  assertExactKeys(value, SNAPSHOT_MANIFEST_FIELDS, 'snapshot.json');
+  if (
+    typeof value.snapshotId !== 'string' || !value.snapshotId.trim() ||
+    typeof value.siteId !== 'string' || !value.siteId.trim() ||
+    typeof value.reason !== 'string' || !value.reason.trim() ||
+    !(value.contentSequence === null || (Number.isSafeInteger(value.contentSequence) && (value.contentSequence as number) >= 0)) ||
+    !(value.generation === null || typeof value.generation === 'string') ||
+    !HASH_PATTERN.test(String(value.contentDigest)) ||
+    !(value.candidateDigest === '' || HASH_PATTERN.test(String(value.candidateDigest))) ||
+    !isRecord(value.files)
+  ) {
+    throw new Error('snapshot.json manifest format is invalid.');
+  }
+
+  const files: Record<string, BackupManifestFile> = Object.create(null) as Record<string, BackupManifestFile>;
+  for (const [filePath, raw] of Object.entries(value.files)) {
+    if (!filePath || filePath.startsWith('/') || filePath.includes('\\') || filePath.split('/').some((part) => !part || part === '.' || part === '..')) {
+      throw new Error(`snapshot.json file path is invalid: ${filePath}`);
+    }
+    if (!isRecord(raw) || !Number.isSafeInteger(raw.size) || (raw.size as number) < 0 || !HASH_PATTERN.test(String(raw.sha256))) {
+      throw new Error(`snapshot.json file identity is invalid: ${filePath}`);
+    }
+    assertExactKeys(raw, new Set(['size', 'sha256']), `snapshot.json files.${filePath}`);
+    files[filePath] = { size: raw.size as number, sha256: raw.sha256 as string };
+  }
+
+  const contentDigest = sha256Hex(stableJsonStringify(files));
+  if (contentDigest !== value.contentDigest) {
+    throw new Error('snapshot.json content digest does not match its file manifest.');
+  }
+
+  return value as unknown as BackupSnapshotManifest;
+}
+
+export function verifyBackupManifestFiles(
+  value: unknown,
+  blobs: ReadonlyMap<string, Uint8Array>
+): BackupSnapshotManifest {
+  const manifest = parseBackupSnapshotManifest(value);
+  for (const [filePath, expected] of Object.entries(manifest.files)) {
+    const bytes = blobs.get(filePath);
+    if (!bytes) throw new Error(`Backup manifest file is missing: ${filePath}`);
+    if (bytes.byteLength !== expected.size) throw new Error(`Backup manifest file size mismatch: ${filePath}`);
+    if (sha256Hex(bytes) !== expected.sha256) throw new Error(`Backup manifest file hash mismatch: ${filePath}`);
+  }
+  return manifest;
 }
 
 export function assertSupportedBackupSchema(value: unknown, label: string): asserts value is Record<string, unknown> {

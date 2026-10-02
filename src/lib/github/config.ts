@@ -168,4 +168,3 @@ export async function getGitHubConnectionDto(): Promise<GitHubConnectionDto> {
     status: connection?.status ?? 'not_configured',
   };
 }
-

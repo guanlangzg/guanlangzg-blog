@@ -264,7 +264,7 @@ export async function PUT(request: NextRequest) {
             recordEditorAuthFailure(request, 'setup');
             return NextResponse.json(
                 {
-                    message: '编辑口令至少需要 12 个字符。',
+                    message: '编辑口令不符合安全要求。',
                 },
                 { status: 400 }
             );

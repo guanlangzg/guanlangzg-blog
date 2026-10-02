@@ -123,6 +123,23 @@
 - **标签输入框键盘无法输入逗号**：受控 `value={tags.join(', ')}` + onChange 立即 split/join 回写，逗号被 React 复位吃掉；`FrontmatterForm.tsx`、`ToolItem.tsx`、`navigation/page.tsx` 三处同模式。
 - 其他应修项（代理核实）：运行时改密不查弱口令黑名单；`void drainPendingBackups()` 无 catch 可 unhandled rejection 击穿进程；`markPreviewFailed` 正则 `/[\\r\\n]+/` 双重转义会删除错误消息中的 r/n 字符；jobs 单个损坏文件使 worker 循环永久停转；`deferClaimedJob` attempt 归零退避恒 1s；恢复读取侧不校验清单哈希；useTheme 初始化读 localStorage 致 hydration 失配；公开站构建白名单漏 `manifest.ts` 与 `llms.txt` 路由；导航编辑器下标 key 可致跨条目覆盖保存；新建文章 Cmd+S 无重入守卫；`getTodayString` 用 UTC 日期。
 
+## 2026-10-02 GitHub 构建测试 + hangzhou2-2 首次部署（已完成）
+
+- **部署架构（已验证跑通）**：GitHub Actions 构建/测试镜像并推 ghcr.io → 服务器只拉取运行。CI（`.github/workflows/ci.yml`）：check 任务（npm ci + check:env + lint + typecheck + vitest --maxWorkers=2 + knip）→ image 任务（buildx + GHA 缓存，镜像标签 `ghcr.io/guanlangzg/guanlangzg-blog:<branch>` 和 `sha-<全 sha>`）。ghcr 包随公开仓库自动为 public，服务器可匿名拉取。配套 `lock-sync.yml`（手动调度，linux 上补全 lock）保留在仓库。
+- **首次镜像构建踩坑记录（均已修复进仓库）**：① lock 缺 linux 平台可选依赖（@emnapi/core、嵌套 @emnapi/runtime@1.11.2，来自 @oxc-* 的 wasm32-wasi 绑定）——Windows 上 npm 永远不会物化该子树，本机无法修复，用 lock-sync 在 ubuntu 上补全；② Dockerfile runner 阶段 chown 引用未 mkdir 的 `/app/management/public`；③ 公开站隔离构建两个缺陷：快照无 /blog/ 移除路径时 Next 15 导出模式对预渲染 0 条的动态路由误报 missing generateStaticParams（改为按需复制该路由）、构建根在项目树外时 workspace 解析不到依赖（build.mjs 现自动 symlink node_modules）；④ Dockerfile 引用空的 scripts/runtime（git 不跟踪空目录）；⑤ 容器内 sharp 渲染 og 中文需 fontconfig + font-noto-cjk。
+- **服务器部署（hangzhou2-2）**：`/opt/guanlangzg-blog`，容器 healthy，公网 `http://114.55.25.190:5678` health/login 均 200，登录令牌端到端验证通过；详见服务器目录 memory.md 2026-10-02 小节。TRUSTED_PROXY_IPS 设为 `*`（直连部署、无代理，无配置时登录端点会按设计 503）。
+- **生产环境修改 Compose `.env` 后须重建容器**：`docker restart` 不会更新已创建容器的环境。安全顺序是比较期望配置（只输出哈希/是否匹配）、`docker compose ... up -d --force-recreate app`、核对环境匹配和 health。应用使用数据卷租约 `.runtime-instance.lock`，短时间内重建可能遇到旧容器留下的租约；先确认锁 hostname 与当前容器 ID 不同且 mtime 超过 `runtime-instance-lease.ts` 的 90 秒 stale 阈值，再由一次 restart 触发代码内回收，禁止未核实直接 rm 锁。运行时认证配置优先于 `EDITOR_ACCESS_TOKEN`；若 `editor-auth.json` 存在，应使用已登录网页改密或服务器 `admin:init`，而不要期待环境变量覆盖哈希。
+- **Git/环境坑**：本机 git 推 github.com 间歇被重置，用本机 Clash 混合端口（127.0.0.1:7897）做 `HTTPS_PROXY` 推送；repo-local git 身份是 `99485603+guanlangzg@users.noreply.github.com`（gh auth status 显示的"242282218"不是登录名，勿据此拼 noreply 邮箱）。
+- 后续待办：浏览器端完成 GitHub App 连接与首次发布（引导页）；验证容器内发布（build.mjs 运行时路径）；dev 合入 main 时 main 上的 ci.yml 会换成完整触发配置。
+
+## 2026-10-02 审查修复轮次（R2/GitHub/口令/公开站）
+
+- **R2 latest 指针并发保护**：`writeLatestPointerConditionally` 读取当前 latest 及 ETag，用 `IfMatch`（已有）或 `IfNoneMatch: '*'`（首次）条件写入；候选 `updatedAt` 小于等于当前指针时跳过，同时间戳用 `snapshotId` 字典序仲裁。测试用 `vi.useFakeTimers()` 控制时间戳，mock S3 对 `IfMatch`/`IfNoneMatch` 冲突返回 412。
+- **GitHub 恢复清单校验**：`snapshot.json` 的 `contentDigest` 是 `files` 的稳定 JSON 摘要（不含 `snapshot.json` 自身）；恢复时只读取 manifest 声明的文件，防止未声明 blob 进入恢复数据。测试需 mock `createConfiguredGitHubBackupClient` 并使用真实 40 位 commit SHA（fake 可 addCommitAlias 映射）。
+- **公开隔离构建新增 metadata route**：Next 15 `output: 'export'` 要求每个 route 显式 `export const dynamic = 'force-static'`，否则构建报错；`manifest.ts` 和 `llms.txt/route.ts` 均已补上。manifest icon 指向实际随 release 输出的 `favicon-32.png`。
+- **口令统一校验**：`isValidEditorSecretShape` 共享长度及禁用词规则；运行时初始化、改密、setup 路由、runtime-config 路由均调用；API 错误文案统一为"编辑口令不符合安全要求。"
+- **验证结果**：聚焦回归 70 项通过；全量 Vitest 117 文件 916 项通过；lint、typecheck、deadcode、`git diff --check` 均通过；`test:release` 19/19 通过。
+
 ## 环境备忘
 
 - 本会话并行派发子代理审查时，同时 5 个会有 3 个报 `user concurrency limit exceeded`，2-3 个并发可稳定运行；重试即可补齐。

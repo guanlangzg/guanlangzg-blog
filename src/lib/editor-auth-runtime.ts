@@ -13,7 +13,7 @@ import { getRuntimeSettingsFilePath } from '@/lib/runtime-config';
 import { isExplicitProductionRuntime, isLocalRuntime } from '@/lib/runtime-environment';
 import {
     createEditorPasswordHash,
-    MIN_EDITOR_SECRET_LENGTH,
+    isValidEditorSecretShape,
     normalizeEditorSecret,
 } from '@/lib/editor-auth-password';
 
@@ -77,7 +77,7 @@ export class RuntimeEditorAuthAlreadyConfiguredError extends Error {
 
 export class RuntimeEditorAuthInvalidSecretError extends Error {
     constructor() {
-        super(`Editor secret must be at least ${MIN_EDITOR_SECRET_LENGTH} characters.`);
+        super('Editor secret does not meet the security requirements.');
         this.name = 'RuntimeEditorAuthInvalidSecretError';
     }
 }
@@ -239,7 +239,7 @@ export async function initializeRuntimeEditorAuth(secret: string): Promise<strin
         throw new RuntimeEditorAuthAlreadyConfiguredError();
     }
 
-    if (normalizedSecret.length < MIN_EDITOR_SECRET_LENGTH) {
+    if (!isValidEditorSecretShape(normalizedSecret)) {
         throw new RuntimeEditorAuthInvalidSecretError();
     }
 
@@ -407,7 +407,7 @@ export async function createRuntimeEditorSession(): Promise<string | null> {
 export async function updateRuntimeEditorAuthSecret(secret: string): Promise<string> {
     const normalizedSecret = normalizeSecret(secret);
 
-    if (normalizedSecret.length < MIN_EDITOR_SECRET_LENGTH) {
+    if (!isValidEditorSecretShape(normalizedSecret)) {
         throw new RuntimeEditorAuthInvalidSecretError();
     }
 

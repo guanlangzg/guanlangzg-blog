@@ -149,6 +149,23 @@ describe('editor auth API', () => {
     );
   });
 
+  it('rejects forbidden weak setup secrets before writing auth configuration', async () => {
+    delete process.env.EDITOR_ACCESS_TOKEN;
+    const configFilePath = path.join(createTempDirectoryWithCleanup('editor-auth-forbidden-'), 'editor-auth.json');
+    process.env.EDITOR_AUTH_CONFIG_FILE = configFilePath;
+    process.env.EDITOR_RUNTIME_AUTH_SETUP_TOKEN = 'setup-token';
+
+    const response = await PUT(createJsonRequest({
+      secret: '123456789012',
+      confirmSecret: '123456789012',
+      setupToken: 'setup-token',
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ message: '编辑口令不符合安全要求。' });
+    expect(fs.existsSync(configFilePath)).toBe(false);
+  });
+
   it('initializes the editor token once from the login page and stores no plaintext secret', async () => {
     delete process.env.EDITOR_ACCESS_TOKEN;
     const directory = createTempDirectoryWithCleanup('editor-auth-setup-');
