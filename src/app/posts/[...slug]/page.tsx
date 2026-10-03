@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { getPostBySlugArrayAsync, getPostsAsync, getRelatedPostsAsync } from '@/lib/markdown';
+import { getPostBySlugArrayAsync, getRelatedPostsAsync } from '@/lib/markdown';
 import { MarkdownContent } from '@/app/components/markdown';
 import { JsonLd, PageHero, PostCard, ReadingProgress, TableOfContents } from '@/app/components/ui';
 import { notFound } from 'next/navigation';
@@ -11,7 +11,7 @@ import { readSiteSettingsFromDiskAsync } from '@/lib/editor-data-storage';
 import { createOgImagePath, getSiteUrl } from '@/lib/site-url';
 import { createArticleStructuredData, createBreadcrumbStructuredData } from '@/lib/structured-data';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 function createPostPath(slugArray: string[]): string {
     return `/posts/${slugArray.map((segment) => encodeURIComponent(segment)).join('/')}`;
@@ -19,14 +19,6 @@ function createPostPath(slugArray: string[]): string {
 
 function createPostCanonicalUrl(slugArray: string[]): string {
     return new URL(createPostPath(slugArray), getSiteUrl()).toString();
-}
-
-export async function generateStaticParams(): Promise<Array<{ slug: string[] }>> {
-    const posts = await getPostsAsync();
-
-    return posts.map((post) => ({
-        slug: post.slugArray,
-    }));
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string[] }> }): Promise<Metadata> {

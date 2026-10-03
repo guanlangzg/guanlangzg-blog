@@ -1,6 +1,7 @@
+from base64 import b64encode
+from hashlib import sha256
+from html.parser import HTMLParser
 from pathlib import Path
-import os
-
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
 
@@ -9,6 +10,74 @@ from ui_smoke_helpers import assert_min_touch_target, assert_no_horizontal_overf
 
 BASE_URL = get_base_url()
 OUTPUT_DIR = Path("output/playwright")
+
+
+class InlineScriptParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.scripts = []
+        self.current_script = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "script":
+            return
+        attributes = dict(attrs)
+        if "src" in attributes:
+            return
+        script_type = (attributes.get("type") or "").split(";")[0].strip().lower()
+        if script_type and script_type not in {
+            "module",
+            "text/javascript",
+            "application/javascript",
+            "text/ecmascript",
+            "application/ecmascript",
+        }:
+            return
+        self.current_script = {
+            "nonce": attributes.get("nonce"),
+            "content": [],
+        }
+        self.scripts.append(self.current_script)
+
+    def handle_data(self, data):
+        if self.current_script is not None:
+            self.current_script["content"].append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self.current_script = None
+
+
+def assert_inline_scripts_allowed_by_csp(response, path):
+    assert response is not None, f"No document response received for {path}"
+    cache_control = response.headers.get("cache-control", "").lower()
+    assert "s-maxage" not in cache_control, f"Public HTML is shared-cacheable on {path}"
+    assert response.headers.get("x-nextjs-prerender") != "1", f"Next.js prerendered {path}"
+    assert response.headers.get("x-nextjs-cache") not in {"HIT", "STALE"}, f"Next.js served cached HTML on {path}"
+    csp = response.headers.get("content-security-policy", "")
+    directives = {
+        parts[0]: parts[1:]
+        for directive in csp.split(";")
+        if (parts := directive.strip().split())
+    }
+    script_sources = directives.get("script-src-elem") or directives.get("script-src") or directives.get("default-src", [])
+    parser = InlineScriptParser()
+    parser.feed(response.text())
+
+    for script in parser.scripts:
+        content = "".join(script["content"])
+        nonce_source = f"'nonce-{script['nonce']}'" if script["nonce"] else None
+        script_hash = f"'sha256-{b64encode(sha256(content.encode('utf-8')).digest()).decode('ascii')}'"
+        uses_nonce_or_hash = any(
+            source.startswith(("'nonce-", "'sha256-", "'sha384-", "'sha512-"))
+            for source in script_sources
+        )
+        allowed = nonce_source in script_sources if nonce_source else False
+        allowed |= script_hash in script_sources
+        allowed |= "'unsafe-inline'" in script_sources and not uses_nonce_or_hash
+        assert allowed, f"CSP blocks an inline script on {path}"
+
+    assert parser.scripts, f"No inline scripts found in document response for {path}"
 
 
 def assert_mobile_public_touch_targets(page):
@@ -20,14 +89,23 @@ def assert_mobile_public_touch_targets(page):
 def verify_page(page, path, heading, console_errors, page_errors):
     target_url = f"{BASE_URL}{path}"
 
+    document_response = None
     for attempt in range(2):
         try:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=90000)
+            with page.expect_response(
+                lambda response: response.request.resource_type == "document"
+                and response.url == target_url,
+                timeout=90000,
+            ) as response_info:
+                page.goto(target_url, wait_until="domcontentloaded", timeout=90000)
+            document_response = response_info.value
             break
         except PlaywrightTimeoutError:
             if attempt == 1:
                 raise
             page.goto("about:blank", timeout=10000)
+
+    assert_inline_scripts_allowed_by_csp(document_response, path)
 
     try:
         expect(page.locator("h1").filter(has_text=heading).first).to_be_visible()
@@ -66,7 +144,7 @@ def main():
             )
             page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-            verify_page(page, "/", "把解决过的问题，整理成下次还能用的笔记", console_errors, page_errors)
+            verify_page(page, "/", "记录值得回看的内容，整理实用的知识与导航", console_errors, page_errors)
             if is_mobile:
                 assert_mobile_public_touch_targets(page)
             page.screenshot(path=OUTPUT_DIR / f"home-{name}.png", full_page=True)
