@@ -5,6 +5,7 @@ from pathlib import Path
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
 
+from public_cache_policy import find_shared_cache_policy
 from ui_smoke_helpers import assert_min_touch_target, assert_no_horizontal_overflow, get_base_url
 
 
@@ -50,8 +51,10 @@ class InlineScriptParser(HTMLParser):
 
 def assert_inline_scripts_allowed_by_csp(response, path):
     assert response is not None, f"No document response received for {path}"
-    cache_control = response.headers.get("cache-control", "").lower()
-    assert "s-maxage" not in cache_control, f"Public HTML is shared-cacheable on {path}"
+    shared_cache_policy = find_shared_cache_policy(response.headers)
+    assert shared_cache_policy is None, (
+        f"Public HTML is shared-cacheable on {path}: {shared_cache_policy}"
+    )
     assert response.headers.get("x-nextjs-prerender") != "1", f"Next.js prerendered {path}"
     assert response.headers.get("x-nextjs-cache") not in {"HIT", "STALE"}, f"Next.js served cached HTML on {path}"
     csp = response.headers.get("content-security-policy", "")
