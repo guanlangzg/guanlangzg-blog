@@ -31,6 +31,7 @@ jobs:
       - run: npm run typecheck
       - run: npx vitest run --maxWorkers=2
       - run: npm run deadcode
+      - run: python -m unittest discover -s scripts/test -p "test_*.py"
 
   image:
     needs: check

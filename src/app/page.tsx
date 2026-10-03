@@ -15,7 +15,7 @@ import { EmptyState, JsonLd, PostCard } from './components/ui';
 import { createCanonicalUrl } from '@/lib/site-url';
 import { createWebSiteStructuredData } from '@/lib/structured-data';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 export async function generateMetadata(): Promise<Metadata> {
     return {

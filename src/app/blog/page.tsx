@@ -6,7 +6,7 @@ import { PageHero } from '@/app/components/ui';
 import { createCanonicalUrl, createOgImagePath } from '@/lib/site-url';
 import { BlogArchiveClient } from './BlogArchiveClient';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 export async function generateMetadata(): Promise<Metadata> {
     const title = '文章归档';

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  dynamic,
   generateMetadata,
-  generateStaticParams,
 } from '@/app/posts/[...slug]/page';
 import type { PostMeta } from '@/lib/markdown';
 
@@ -61,11 +61,8 @@ vi.mock('next/navigation', () => ({
 }));
 
 describe('PostPage metadata', () => {
-  it('generates static params for public post slugs', async () => {
-    await expect(generateStaticParams()).resolves.toEqual([
-      { slug: ['hello-world'] },
-      { slug: ['nested', 'article'] },
-    ]);
+  it('renders public post routes dynamically for request-scoped CSP nonces', () => {
+    expect(dynamic).toBe('force-dynamic');
   });
 
   it('adds canonical article metadata from the site URL', async () => {
