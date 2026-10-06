@@ -32,6 +32,7 @@ const PUBLIC_RESOURCE_PATHS = new Set([
 const PUBLIC_READER_DOCUMENT_PATHS = new Set(['/', '/blog', '/navigation']);
 const PUBLIC_READER_DOCUMENT_PREFIXES = ['/blog/', '/posts/', '/navigation/'];
 const PUBLIC_READER_RESOURCE_PATHS = new Set(['/feed.xml', '/sitemap.xml', '/robots.txt', '/og']);
+const MANAGED_PUBLIC_MEDIA_PATH = /^\/media\/files\/(?:[a-zA-Z0-9_-]+\/)*[a-f0-9]{64}\.(?:png|jpg|webp|gif)$/i;
 
 function isPublicReaderPath(pathname: string): boolean {
     if (PUBLIC_READER_DOCUMENT_PATHS.has(pathname)) return true;
@@ -112,12 +113,16 @@ export function classifyVpsRequest(input: VpsRequestInput): VpsRequestDecision {
         return { kind: 'preview', releaseId, artifactPath: segments.join('/') };
     }
 
+    const isManagedMedia = MANAGED_PUBLIC_MEDIA_PATH.test(pathname);
     const isDocument = isDocumentPath(segments);
     // A redirect only helps a real browser navigation: RSC payload and prefetch requests
     // for the same route must fail closed instead of following a login redirect.
     const target: 'document' | 'resource' = isDocument && !input.isRscRequest ? 'document' : 'resource';
 
     if (input.previewRelease === null) {
+        // Without a named release the media route serves managed media only after checking the
+        // bytes against the verified live snapshot, so this URL stays on the dynamic app.
+        if (isManagedMedia) return { kind: 'allow' };
         return isPublicReaderPath(pathname) ? { kind: 'allow' } : { kind: 'blocked', target };
     }
     if (!RELEASE_ID_PATTERN.test(input.previewRelease)) return { kind: 'blocked', target };
@@ -125,6 +130,10 @@ export function classifyVpsRequest(input: VpsRequestInput): VpsRequestDecision {
     return {
         kind: 'preview',
         releaseId: input.previewRelease,
-        artifactPath: resolveArtifactPath(segments, isDocument, input.isRscRequest),
+        // Sealed media lives under _site/<releaseId>/media/..., so a named preview must read the
+        // frozen bytes of that release instead of the working copy behind the bare /media/... URL.
+        artifactPath: isManagedMedia
+            ? `_site/${input.previewRelease}/${segments.join('/')}`
+            : resolveArtifactPath(segments, isDocument, input.isRscRequest),
     };
 }

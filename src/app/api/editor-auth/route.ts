@@ -13,6 +13,7 @@ import {
 } from '@/lib/editor-auth';
 import {
     createEditorAuthConfigInvalidResponse,
+    ensureEditorLoginRequest,
     ensureEditorWriteRequest,
 } from '@/lib/editor-api-auth';
 import {
@@ -70,6 +71,12 @@ export async function POST(request: NextRequest) {
                 },
                 { status: 503 }
             );
+        }
+
+        const loginRequestError = ensureEditorLoginRequest(request);
+
+        if (loginRequestError) {
+            return loginRequestError;
         }
 
         const rateLimitResponse = getEditorAuthRateLimitResponse(request, 'login');

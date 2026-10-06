@@ -8,6 +8,7 @@ import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 import { withRuntimeDataRootLock } from '@/lib/runtime-data-lock';
 import { recordContentMutationUnderLock } from '@/lib/jobs/watermark';
 import { createJsonRevision } from '@/lib/json-revision';
+import { readVerifiedLiveSnapshot } from '@/lib/live-public-reader';
 
 const MEDIA_MANIFEST_FILE_NAME = 'manifest.json';
 export const MEDIA_FILES_DIRECTORY_NAME = 'files';
@@ -504,6 +505,12 @@ function isManagedMediaFileName(fileName: string): boolean {
 export async function collectOrphanMediaFiles(): Promise<string[]> {
     const manifest = readEditorMediaManifest();
     const knownPaths = new Set(manifest.assets.map((asset) => asset.path));
+    // A sealed live release can reference media that the current working manifest no longer
+    // lists (restore, manual manifest edit). Those bytes still back the published site, so
+    // they must survive GC. An invalid live pointer fails closed instead of deleting them.
+    for (const media of readVerifiedLiveSnapshot()?.snapshot.media ?? []) {
+        knownPaths.add(media.originalPath);
+    }
 
     return collectStoredMediaFilePaths(getMediaFilesRootPath())
         .filter((filePath) => !knownPaths.has(filePath))

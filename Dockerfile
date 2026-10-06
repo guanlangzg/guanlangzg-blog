@@ -26,15 +26,15 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \
     NEXT_PUBLIC_SITE_URL=https://guanlangzg.github.io
 
-# Build both applications with the same locked dependency set. The synthetic
-# export catches public-builder closure errors before an image is released.
+# Build both applications with the same locked dependency set. The public-site
+# source closure is NOT probed here: a build in this stage sees the whole source
+# tree and would prove nothing about the shipped layout. CI runs
+# scripts/test/verify-builder-container.mjs against the final runner image instead
+# (offline, non-root, real fixture) before any release image is pushed.
 RUN npm run lint && \
     npm run typecheck && \
     npm run build && \
-    node -e "const fs=require('fs');fs.mkdirSync('/var/lib/guanlan/build/image-probe-input',{recursive:true});fs.writeFileSync('/var/lib/guanlan/build/image-probe-input/probe.json',JSON.stringify({releaseId:'image-probe',site:{title:'观澜志',description:'镜像构建探测'},posts:[{slug:'探测',title:'探测',description:'探测',date:'2026-09-30',tags:[],content:'探测'}],navigation:[]}))" && \
-    BLOG_BUILD_ROOT=/var/lib/guanlan/build node scripts/public-site/build.mjs --snapshot /var/lib/guanlan/build/image-probe-input/probe.json --out /var/lib/guanlan/build/image-probe-output && \
-    test -f /var/lib/guanlan/build/image-probe-output/image-probe/app/out/index.html && \
-    rm -rf /var/lib/guanlan/build/image-probe-input /var/lib/guanlan/build/image-probe-output /app/.g01-public-site-* /app/.next/cache node_modules/.cache /tmp/*
+    rm -rf /app/.g01-public-site-* /app/.next/cache node_modules/.cache /tmp/*
 
 FROM node:24-alpine AS runner
 
@@ -73,6 +73,7 @@ RUN apk add --no-cache curl su-exec libc6-compat fontconfig font-noto-cjk && \
         /app/src/public-site/app/blog/[...slug] /app/src/public-site/app/navigation \
         /app/src/public-site/app/search /app/src/public-site/app/search-index.json \
         /app/src/public-site/app/feed.xml /app/src/public-site/app/posts/[slug] \
+        /app/src/public-site/app/llms.txt \
         /app/src/public-site/components /app/src/public-site/views \
         /app/src/app/components/ui \
         /app/src/app/components/markdown /app/src/app/components/theme \
@@ -102,7 +103,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/package.json /app/package-lock.js
 COPY --from=builder --chown=nextjs:nodejs /app/postcss.config.mjs /app/postcss.config.mjs
 COPY --from=builder --chown=nextjs:nodejs /app/tailwind.config.ts /app/tailwind.config.ts
 COPY --from=builder --chown=nextjs:nodejs /app/scripts/public-site /app/scripts/public-site
-COPY --from=builder --chown=nextjs:nodejs /app/src/public-site/app/layout.tsx /app/src/public-site/app/globals.css /app/src/public-site/app/page.tsx /app/src/public-site/app/not-found.tsx /app/src/public-site/app/sitemap.ts /app/src/public-site/app/robots.ts /app/src/public-site/app/
+COPY --from=builder --chown=nextjs:nodejs /app/src/public-site/app/layout.tsx /app/src/public-site/app/globals.css /app/src/public-site/app/page.tsx /app/src/public-site/app/not-found.tsx /app/src/public-site/app/sitemap.ts /app/src/public-site/app/robots.ts /app/src/public-site/app/manifest.ts /app/src/public-site/app/
+COPY --from=builder --chown=nextjs:nodejs /app/src/public-site/app/llms.txt/route.ts /app/src/public-site/app/llms.txt/route.ts
 COPY --from=builder --chown=nextjs:nodejs /app/src/public-site/app/blog/page.tsx /app/src/public-site/app/blog/
 COPY --from=builder --chown=nextjs:nodejs /app/src/public-site/app/blog/[[]...slug]/page.tsx /app/src/public-site/app/blog/[...slug]/
 COPY --from=builder --chown=nextjs:nodejs /app/src/public-site/app/navigation/page.tsx /app/src/public-site/app/navigation/

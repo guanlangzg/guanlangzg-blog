@@ -68,6 +68,25 @@ describe('public snapshot projection', () => {
     expect(content).toContain('![Do not rewrite](/media/files/cover.png)');
   });
 
+  it('rewrites the equivalent spellings of a managed media reference outside fenced code', () => {
+    const base = snapshot();
+    base.articles[0].content = [
+      '![relative](./media/files/cover.png)',
+      '![bare](media/files/cover.png)',
+      '![origin](https://guanlangzg.github.io/media/files/cover.png)',
+      '![external](https://cdn.example.com/media/files/cover.png)',
+      '![unmanaged](./media/files/other.png)',
+    ].join('\n');
+
+    const content = fromReleaseSnapshot('release-1', base).posts[0].content;
+
+    expect(content).toContain('![relative](/_site/release-1/media/files/cover.png)');
+    expect(content).toContain('![bare](/_site/release-1/media/files/cover.png)');
+    expect(content).toContain('![origin](/_site/release-1/media/files/cover.png)');
+    expect(content).toContain('![external](https://cdn.example.com/media/files/cover.png)');
+    expect(content).toContain('![unmanaged](./media/files/other.png)');
+  });
+
   it('does not read or include fields from the mutable working copy', () => {
     const base = snapshot();
     const projected = fromReleaseSnapshot('release-1', base);

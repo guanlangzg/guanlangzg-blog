@@ -1,15 +1,20 @@
 import type { MetadataRoute } from 'next';
-import { getPostsAsync } from '@/lib/markdown';
+import { getLivePostsFromSnapshot, getPostsAsync } from '@/lib/markdown';
+import { getPublicLiveSnapshot, isLiveReaderRuntime } from '@/lib/live-public-reader';
 import { getSiteUrl } from '@/lib/site-url';
 
-export const revalidate = 3600;
+// The sitemap must describe the release the reader pages currently serve, so it cannot be a cached
+// generation: a stale ISR copy would advertise a previous release for up to an hour.
+export const dynamic = 'force-dynamic';
 
 function createUrl(pathname: string): string {
     return new URL(pathname, getSiteUrl()).toString();
 }
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-    const posts = (await getPostsAsync()).filter((post) => !post.slugArray.includes('navigation'));
+    const live = isLiveReaderRuntime() ? getPublicLiveSnapshot() : null;
+    const posts = (live ? getLivePostsFromSnapshot(live) : await getPostsAsync())
+        .filter((post) => !post.slugArray.includes('navigation'));
     const now = new Date();
     const staticRoutes: MetadataRoute.Sitemap = [
         {

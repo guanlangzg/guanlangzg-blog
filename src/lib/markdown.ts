@@ -16,6 +16,7 @@ import { countMarkdownWords } from '@/lib/article-quality';
 import { normalizeOptionalString } from '@/lib/utils';
 import { registerEditorRuntimeCacheReset } from '@/lib/editor-runtime-cache';
 import { normalizeSourceLinks, normalizeRevisionNotes } from '@/lib/source-links';
+import { getPublicLiveSnapshot, isLiveReaderRuntime, type PublicLiveSnapshot } from '@/lib/live-public-reader';
 import { parseRawMarkdownFrontmatter } from '@/lib/frontmatter';
 import { parseArticleIndex, type ArticleIndexEntry } from '@/lib/article-index';
 
@@ -568,6 +569,8 @@ async function getSeedPostBySlugArrayAsync(slugArray: string[]) {
 }
 
 export function getPosts(): PostMeta[] {
+    const livePosts = getLivePosts();
+    if (livePosts) return livePosts;
     if (isRuntimeArticleSourceEnabled()) {
         if (isRuntimeArticleDataAvailable()) {
             return getRuntimePosts();
@@ -576,7 +579,56 @@ export function getPosts(): PostMeta[] {
     return getSeedPosts();
 }
 
+function mapLiveArticleToPostMeta(article: Article): PostMeta {
+    const post = mapArticleToPostMeta(article);
+    return { ...post, slugArray: [post.slug] };
+}
+
+function decodeSlugArray(slugArray: string[]): string[] | null {
+    try {
+        return slugArray.map((segment) => decodeURIComponent(segment));
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Reads one article out of an already loaded live snapshot. Callers that render a whole request
+ * (body, related posts, settings) use these helpers so every part of the response comes from the
+ * same release instead of re-reading the live pointer per field.
+ */
+export function getLivePostFromSnapshot(
+    live: PublicLiveSnapshot,
+    slugArray: string[]
+): SearchablePost | null {
+    const decoded = decodeSlugArray(slugArray);
+
+    if (!decoded || decoded.length !== 1) {
+        return null;
+    }
+
+    const article = live.articles.find((item) => createRuntimeSlug(item) === decoded[0]);
+    return article ? { meta: mapLiveArticleToPostMeta(article), content: article.content } : null;
+}
+
+export function getLivePostsFromSnapshot(live: PublicLiveSnapshot): PostMeta[] {
+    return live.articles.map(mapLiveArticleToPostMeta).sort(comparePostsByDateDescending);
+}
+
+export function getLiveSearchablePostsFromSnapshot(live: PublicLiveSnapshot): SearchablePost[] {
+    return live.articles
+        .map((article) => ({ meta: mapLiveArticleToPostMeta(article), content: article.content }))
+        .sort((left, right) => comparePostsByDateDescending(left.meta, right.meta));
+}
+
+export function getLivePosts(): PostMeta[] | null {
+    if (!isLiveReaderRuntime()) return null;
+    return getLivePostsFromSnapshot(getPublicLiveSnapshot());
+}
+
 export async function getPostsAsync(): Promise<PostMeta[]> {
+    const livePosts = getLivePosts();
+    if (livePosts) return livePosts;
     if (isRuntimeArticleSourceEnabled()) {
         if (await isRuntimeArticleDataAvailableAsync()) {
             return getRuntimePostsAsync();
@@ -586,6 +638,9 @@ export async function getPostsAsync(): Promise<PostMeta[]> {
 }
 
 export async function getSearchablePostsAsync(): Promise<SearchablePost[]> {
+    if (isLiveReaderRuntime()) {
+        return getLiveSearchablePostsFromSnapshot(getPublicLiveSnapshot());
+    }
     if (isRuntimeArticleSourceEnabled()) {
         if (await isRuntimeArticleDataAvailableAsync()) {
             return getRuntimeSearchablePostsAsync();
@@ -595,11 +650,12 @@ export async function getSearchablePostsAsync(): Promise<SearchablePost[]> {
 }
 
 export function getPostBySlugArray(slugArray: string[]) {
-    let decoded: string[];
+    if (isLiveReaderRuntime()) {
+        return getLivePostFromSnapshot(getPublicLiveSnapshot(), slugArray);
+    }
+    const decoded = decodeSlugArray(slugArray);
 
-    try {
-        decoded = slugArray.map((segment) => decodeURIComponent(segment));
-    } catch {
+    if (!decoded) {
         return null;
     }
 
@@ -612,11 +668,12 @@ export function getPostBySlugArray(slugArray: string[]) {
 }
 
 export async function getPostBySlugArrayAsync(slugArray: string[]) {
-    let decoded: string[];
+    if (isLiveReaderRuntime()) {
+        return getLivePostFromSnapshot(getPublicLiveSnapshot(), slugArray);
+    }
+    const decoded = decodeSlugArray(slugArray);
 
-    try {
-        decoded = slugArray.map((segment) => decodeURIComponent(segment));
-    } catch {
+    if (!decoded) {
         return null;
     }
 
@@ -628,8 +685,8 @@ export async function getPostBySlugArrayAsync(slugArray: string[]) {
     return getSeedPostBySlugArrayAsync(decoded);
 }
 
-export function getRelatedPosts(meta: PostMeta, limit = 4): PostMeta[] {
-    return getPosts()
+export function getRelatedPostsFromList(posts: PostMeta[], meta: PostMeta, limit = 4): PostMeta[] {
+    return posts
         .filter((post) => post.slug !== meta.slug && !post.slugArray.includes('navigation'))
         .map((post) => ({
             post,
@@ -641,17 +698,12 @@ export function getRelatedPosts(meta: PostMeta, limit = 4): PostMeta[] {
         .map((item) => item.post);
 }
 
+export function getRelatedPosts(meta: PostMeta, limit = 4): PostMeta[] {
+    return getRelatedPostsFromList(getPosts(), meta, limit);
+}
+
 export async function getRelatedPostsAsync(meta: PostMeta, limit = 4): Promise<PostMeta[]> {
-    return (await getPostsAsync())
-        .filter((post) => post.slug !== meta.slug && !post.slugArray.includes('navigation'))
-        .map((post) => ({
-            post,
-            score: getRelatedScore(meta, post),
-        }))
-        .filter((item) => item.score > 0)
-        .sort((first, second) => second.score - first.score || second.post.date.localeCompare(first.post.date))
-        .slice(0, limit)
-        .map((item) => item.post);
+    return getRelatedPostsFromList(await getPostsAsync(), meta, limit);
 }
 
 function getRelatedScore(current: PostMeta, candidate: PostMeta): number {

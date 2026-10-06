@@ -1,11 +1,46 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Article } from '@/app/types/article';
 import type { Category } from '@/app/types/navigation';
 import { createNavigationIdentityMap } from '@/lib/navigation-identities';
 import type { RestorableEditorData } from '@/lib/restoring/plan';
 import { createRestorePlan } from '@/lib/restoring/plan';
 import { DEFAULT_SITE_SETTINGS, type SiteSettings } from '@/lib/site-settings';
+
+const restoreBackupMock = vi.hoisted(() => ({ decodeBackupCommit: vi.fn() }));
+
+vi.mock('@/lib/editor-runtime/restore-backup', () => ({
+  decodeBackupCommit: restoreBackupMock.decodeBackupCommit,
+}));
+
+import { createStoredRestorePlan } from '@/lib/editor-runtime/restore-plan-runtime';
+
+const ORIGINAL_BLOG_DATA_ROOT = process.env.BLOG_DATA_ROOT;
+const tempDirectories: string[] = [];
+
+afterEach(() => {
+  restoreBackupMock.decodeBackupCommit.mockReset();
+
+  if (ORIGINAL_BLOG_DATA_ROOT === undefined) {
+    delete process.env.BLOG_DATA_ROOT;
+  } else {
+    process.env.BLOG_DATA_ROOT = ORIGINAL_BLOG_DATA_ROOT;
+  }
+
+  while (tempDirectories.length > 0) {
+    fs.rmSync(tempDirectories.pop() as string, { recursive: true, force: true });
+  }
+});
+
+function tempDataRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'blog-restore-plan-'));
+  tempDirectories.push(root);
+  process.env.BLOG_DATA_ROOT = root;
+  return root;
+}
 
 const CURRENT_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
 const BACKUP_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 2]);
@@ -102,6 +137,7 @@ describe('restore merge planning', () => {
       'article-id',
       'article-slug',
       'navigation-ambiguous',
+      'navigation-identity',
       'settings-field',
       'media-path',
     ]));
@@ -129,5 +165,61 @@ describe('restore merge planning', () => {
     expect(first.identical.articles.map((item) => item.itemId)).toEqual(['existing']);
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.conflicts)).toBe(true);
+  });
+
+  it('reports a legacy backup category that already exists as an applicable conflict', () => {
+    const currentNav = category([tool('Existing', 'https://example.com/existing/')]);
+    const backupNav = category([
+      tool('Existing', 'https://example.com/existing/'),
+      tool('Added', 'https://example.com/added/'),
+    ]);
+    const current = data({ navigation: currentNav, navigationIdentities: createNavigationIdentityMap(currentNav) });
+    const backup = data({ navigation: backupNav, navigationIdentities: null });
+    const plan = createRestorePlan(current, backup, { currentRevision: 'revision-1', backupCommit: 'a'.repeat(40) });
+
+    // The category is not new, so it must not be offered as an addition the merge would refuse.
+    expect(plan.added.navigation).toEqual([
+      expect.objectContaining({ itemId: 'resources#https://example.com/added/' }),
+    ]);
+    expect(plan.identical.navigation).toEqual([]);
+    expect(plan.conflicts).toEqual([
+      expect.objectContaining({
+        kind: 'navigation-identity',
+        resolutions: ['keep-current', 'use-backup', 'keep-both'],
+        subject: expect.objectContaining({ categorySlug: 'resources' }),
+      }),
+    ]);
+  });
+
+  it('stores a plan for a backup the apply step can accept', async () => {
+    const root = tempDataRoot();
+    restoreBackupMock.decodeBackupCommit.mockResolvedValue({
+      commit: 'a'.repeat(40),
+      data: data({ articles: [article('restored', 'restored', 'backup body')] }),
+    });
+
+    const stored = await createStoredRestorePlan('a'.repeat(40));
+
+    expect(stored.planId).toEqual(expect.any(String));
+    expect(fs.existsSync(path.join(root, 'workflow', 'restore-plans', stored.planId, 'plan.json'))).toBe(true);
+  });
+
+  it('refuses to store a plan for a backup the apply step would reject', async () => {
+    const root = tempDataRoot();
+    restoreBackupMock.decodeBackupCommit.mockResolvedValue({
+      commit: 'a'.repeat(40),
+      data: data({
+        articles: [
+          article('legacy-a', 'duplicate', 'first'),
+          article('legacy-b', 'duplicate', 'second'),
+        ],
+      }),
+    });
+
+    await expect(createStoredRestorePlan('a'.repeat(40))).rejects.toMatchObject({
+      status: 422,
+      code: 'INVALID_BACKUP',
+    });
+    expect(fs.existsSync(path.join(root, 'workflow', 'restore-plans'))).toBe(false);
   });
 });

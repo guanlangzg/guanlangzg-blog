@@ -9,6 +9,7 @@ import {
 } from '@/lib/api-json-body';
 import {
     createEditorBackupInvalidResponse,
+    createEditorBackupStateInvalidResponse,
     createEditorDataFileInvalidResponse,
     createEditorDataLockTimeoutResponse,
     createEditorDataRootUnavailableResponse,
@@ -121,6 +122,12 @@ export async function POST(request: NextRequest) {
 
         if (unavailableResponse) {
             return unavailableResponse;
+        }
+
+        const backupStateResponse = createEditorBackupStateInvalidResponse(error);
+
+        if (backupStateResponse) {
+            return backupStateResponse;
         }
 
         const lockTimeoutResponse = createEditorDataLockTimeoutResponse(error);

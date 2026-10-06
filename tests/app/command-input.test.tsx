@@ -1,7 +1,15 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandInput } from '@/app/components/header/CommandInput';
+import { GET as getEditorAuthStatus, POST as loginEditor } from '@/app/api/editor-auth/route';
+import { resetAppRuntimeConfigCacheForTests } from '@/lib/app-runtime-config';
+import { resetEditorAuthRateLimitForTests } from '@/lib/editor-auth-rate-limit';
+import { resetEnvironmentEditorSessionForTests } from '@/lib/editor-auth-runtime';
 
 const pushMock = vi.fn();
 
@@ -11,9 +19,32 @@ vi.mock('next/navigation', () => ({
   }),
 }));
 
+const EDITOR_TEST_SECRET = 'quick-entry-secret';
+const ORIGINAL_ENV = {
+  BLOG_DATA_ROOT: process.env.BLOG_DATA_ROOT,
+  EDITOR_ACCESS_TOKEN: process.env.EDITOR_ACCESS_TOKEN,
+  EDITOR_AUTH_CONFIG_FILE: process.env.EDITOR_AUTH_CONFIG_FILE,
+};
+
+async function createEditorSessionCookie(): Promise<string> {
+  const response = await loginEditor(new NextRequest('http://localhost/api/editor-auth', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'http://localhost',
+    },
+    body: JSON.stringify({ secret: EDITOR_TEST_SECRET }),
+  }));
+
+  expect(response.status).toBe(200);
+
+  return response.headers.get('set-cookie')?.split(';')[0] ?? '';
+}
+
 describe('CommandInput', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let tempDataRoot: string;
   const fetchMock = vi.fn();
 
   beforeEach(() => {
@@ -35,6 +66,13 @@ describe('CommandInput', () => {
     );
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     vi.stubGlobal('fetch', fetchMock);
+    tempDataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'blog-command-input-'));
+    process.env.BLOG_DATA_ROOT = tempDataRoot;
+    process.env.EDITOR_ACCESS_TOKEN = EDITOR_TEST_SECRET;
+    delete process.env.EDITOR_AUTH_CONFIG_FILE;
+    resetAppRuntimeConfigCacheForTests();
+    resetEditorAuthRateLimitForTests();
+    resetEnvironmentEditorSessionForTests();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -47,6 +85,19 @@ describe('CommandInput', () => {
     container.remove();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    resetEditorAuthRateLimitForTests();
+    resetEnvironmentEditorSessionForTests();
+    resetAppRuntimeConfigCacheForTests();
+
+    for (const [name, value] of Object.entries(ORIGINAL_ENV)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+
+    fs.rmSync(tempDataRoot, { recursive: true, force: true });
   });
 
   async function typeDesktopQuery(value: string): Promise<void> {
@@ -154,7 +205,29 @@ describe('CommandInput', () => {
     expect(container.textContent).toContain('输入关键词搜索文章和链接');
   });
 
-  it('shows the settings entry in the initialized admin command menu', async () => {
+  it('shows the editor entries for a real logged-in session cookie', async () => {
+    const sessionCookie = await createEditorSessionCookie();
+    let reportedStatus: { configured?: boolean; authenticated?: boolean } | null = null;
+
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      const headers = new Headers(init?.headers);
+
+      headers.set('Cookie', sessionCookie);
+
+      const response = await getEditorAuthStatus(
+        new NextRequest(new URL(requestUrl, 'http://localhost'), { headers })
+      );
+
+      reportedStatus = await response.clone().json();
+
+      return response;
+    });
+
     act(() => {
       root.render(<CommandInput />);
     });
@@ -168,7 +241,16 @@ describe('CommandInput', () => {
         credentials: 'include',
       })
     );
+    // The status the menu renders comes from the real route validating the real
+    // session cookie produced by the login POST above.
+    expect(reportedStatus).toEqual(
+      expect.objectContaining({
+        configured: true,
+        authenticated: true,
+      })
+    );
     expect(container.textContent).toContain('站点设置');
+    expect(container.textContent).toContain('写文章');
   });
 
   it('shows first-use initialization entry before editor auth is configured', async () => {

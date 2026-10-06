@@ -152,16 +152,55 @@ function readJobFile(filePath: string): JobRecord {
     return job;
 }
 
-export function listJobsUnderLock(root: string): JobRecord[] {
+export interface InvalidPersistedFile {
+    path: string;
+    /** Fixed classification; raw parser text can embed stored file content. */
+    reason: string;
+}
+
+export interface JobDirectoryInspection {
+    jobs: JobRecord[];
+    invalidFiles: InvalidPersistedFile[];
+}
+
+function describeJobFileProblem(error: unknown): string {
+    return error instanceof SyntaxError ? 'invalid JSON' : 'invalid job record';
+}
+
+/**
+ * Read-only scan of the jobs directory. A single damaged file must never hide
+ * the remaining jobs or stop the worker, and it must stay untouched on disk
+ * until an operator repairs it.
+ */
+export function inspectJobsDirectory(root: string): JobDirectoryInspection {
     const directory = jobsDirectory(root);
     if (!fs.existsSync(directory)) {
-        return [];
+        return { jobs: [], invalidFiles: [] };
     }
 
-    return fs.readdirSync(directory)
-        .filter((fileName) => fileName.endsWith('.json'))
-        .map((fileName) => readJobFile(path.join(directory, fileName)))
-        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const jobs: JobRecord[] = [];
+    const invalidFiles: InvalidPersistedFile[] = [];
+
+    for (const fileName of fs.readdirSync(directory)) {
+        if (!fileName.endsWith('.json')) {
+            continue;
+        }
+
+        const filePath = path.join(directory, fileName);
+
+        try {
+            jobs.push(readJobFile(filePath));
+        } catch (error) {
+            invalidFiles.push({ path: filePath, reason: describeJobFileProblem(error) });
+        }
+    }
+
+    jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    return { jobs, invalidFiles };
+}
+
+export function listJobsUnderLock(root: string): JobRecord[] {
+    return inspectJobsDirectory(root).jobs;
 }
 
 const CANDIDATE_BUILD_STATUSES = new Set(['building', 'awaiting_backup']);
@@ -656,12 +695,25 @@ export async function heartbeatClaimedJob(
     ));
 }
 
+function reportInvalidPersistedState(root: string, invalidFiles: InvalidPersistedFile[]): void {
+    if (invalidFiles.length === 0) {
+        return;
+    }
+
+    const relativePaths = invalidFiles.map((file) => path.relative(root, file.path).split(path.sep).join('/'));
+    console.error(
+        '[jobs-store] Invalid persisted state files detected; the worker keeps polling and leaves them untouched for repair:',
+        relativePaths.join(', ')
+    );
+}
+
 export async function recoverPersistedJobs(options: ClaimOptions = {}): Promise<JobRecord[]> {
     const now = options.now ?? new Date();
     const leaseMs = options.leaseMs ?? DEFAULT_JOB_LEASE_MS;
     const root = getRuntimeDataRootPath();
-    const { ensureDirtyBackupJobUnderLock } = await import('@/lib/jobs/watermark');
+    const { ensureDirtyBackupJobUnderLock, inspectPersistedBackupState } = await import('@/lib/jobs/watermark');
     const phaseOne = await withRuntimeDataRootLock(() => {
+        reportInvalidPersistedState(root, inspectPersistedBackupState(root).invalidFiles);
         const recovered: JobRecord[] = [];
         for (const job of listJobsUnderLock(root)) {
             const expired = job.status === 'running' && Date.parse(job.nextAttemptAt) <= now.getTime();

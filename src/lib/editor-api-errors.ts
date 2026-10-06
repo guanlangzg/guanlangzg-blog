@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { JsonBodyParseError, JsonBodyTooLargeError } from '@/lib/api-json-body';
 import { EditorDataLockTimeoutError } from '@/lib/editor-data-storage';
+import { BackupStateInvalidError } from '@/lib/jobs/watermark';
 import { GitHubApiError } from '@/lib/github/client';
 import { ArticleHistoryConflictError } from '@/lib/history/articles';
 import { PublishingServiceError } from '@/lib/publishing/service';
@@ -110,6 +111,12 @@ export function mapEditorApiError(error: unknown): NextResponse<EditorApiFailure
   if (error instanceof JsonBodyTooLargeError) return failure(413, 'BODY_TOO_LARGE');
   if (error instanceof JsonBodyParseError) return failure(400, 'INVALID_JSON');
   if (error instanceof EditorDataLockTimeoutError) return failure(423, 'DATA_LOCK_TIMEOUT', { retryable: true });
+  if (error instanceof BackupStateInvalidError) {
+    return failure(503, 'INTERNAL_ERROR', {
+      message: '服务器备份记账文件损坏，已暂停内容写入；请先修复运行时状态文件。',
+      retryable: true,
+    });
+  }
   if (error instanceof RestoreApplicationError) {
     return failure(error.status, error.code, { retryable: error.status === 507 || error.status === 423 });
   }

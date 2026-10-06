@@ -3,6 +3,7 @@ import {
   MAX_FRONTMATTER_IMPORT_LENGTH,
   MAX_MARKDOWN_IMPORT_LENGTH,
   parseMarkdownWithFrontmatter,
+  parseRawMarkdownFrontmatter,
   serializeMarkdownWithFrontmatter,
 } from '@/lib/frontmatter';
 
@@ -99,6 +100,55 @@ Body`);
     expect(() => parseMarkdownWithFrontmatter('x'.repeat(MAX_MARKDOWN_IMPORT_LENGTH + 1))).toThrow(
       'Markdown import is too large.'
     );
+  });
+
+  it('keeps the whole document as body when the opening fence is never closed', () => {
+    const markdown = '---\n# Hello\n\nSome paragraph body text.\n';
+    const parsed = parseMarkdownWithFrontmatter(markdown);
+    const raw = parseRawMarkdownFrontmatter(markdown);
+
+    expect(parsed.hasFrontmatter).toBe(false);
+    expect(parsed.content).toBe(markdown);
+    expect(parsed.frontmatter.title).toBeUndefined();
+    expect(parsed.frontmatter.date).toBeUndefined();
+    expect(raw).toEqual({ content: markdown, data: {}, hasFrontmatter: false });
+  });
+
+  it('treats a leading thematic break as body instead of frontmatter', () => {
+    const markdown = '---\n\n正文第一段。\n\n---\n\n正文第二段。\n';
+    const parsed = parseMarkdownWithFrontmatter(markdown);
+
+    expect(parsed.hasFrontmatter).toBe(false);
+    expect(parsed.content).toBe(markdown);
+  });
+
+  it('parses an empty frontmatter block as frontmatter', () => {
+    const parsed = parseMarkdownWithFrontmatter('---\n---\nBody');
+
+    expect(parsed.hasFrontmatter).toBe(true);
+    expect(parsed.content).toBe('Body');
+    expect(parsed.frontmatter.title).toBeUndefined();
+    expect(parsed.frontmatter.sourceLinks).toEqual([]);
+  });
+
+  it('keeps CRLF documents intact when the fence is closed or missing', () => {
+    const closed = parseMarkdownWithFrontmatter('---\r\ntitle: CRLF\r\n---\r\nBody');
+
+    expect(closed.hasFrontmatter).toBe(true);
+    expect(closed.frontmatter.title).toBe('CRLF');
+    expect(closed.content).toBe('Body');
+
+    const unclosed = '---\r\n# Hello\r\n';
+    const parsed = parseMarkdownWithFrontmatter(unclosed);
+
+    expect(parsed.hasFrontmatter).toBe(false);
+    expect(parsed.content).toBe(unclosed);
+  });
+
+  it('does not apply the frontmatter size limit to documents without a closing fence', () => {
+    const markdown = `---\n${'x'.repeat(MAX_FRONTMATTER_IMPORT_LENGTH + 1)}`;
+
+    expect(() => parseMarkdownWithFrontmatter(markdown)).not.toThrow();
   });
 
   it('rejects oversized frontmatter blocks before parsing YAML', () => {

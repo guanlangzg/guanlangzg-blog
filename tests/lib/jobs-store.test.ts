@@ -718,6 +718,55 @@ describe('persistent jobs and backup watermark', () => {
         expect(isBackupCaughtUp(caughtUp)).toBe(true);
     });
 
+    it('keeps other jobs claimable when one persisted job file is corrupt and leaves it untouched', async () => {
+        const root = createDataRoot();
+        const job = await createJob({ type: 'backup', input: { revision: 'r1' } });
+        const corruptPath = path.join(root, 'workflow', 'jobs', 'corrupt-history.json');
+        const corruptBytes = '{ definitely-not-a-job';
+        fs.writeFileSync(corruptPath, corruptBytes, 'utf8');
+
+        expect((await listJobs()).map((record) => record.id)).toEqual([job.id]);
+
+        const claimed = await claimNextJob();
+
+        expect(claimed?.id).toBe(job.id);
+        expect(fs.readFileSync(corruptPath, 'utf8')).toBe(corruptBytes);
+    });
+
+    it('recovers persisted jobs when the backup watermark is corrupt without rewriting it', async () => {
+        const root = createDataRoot();
+        const record = {
+            id: 'recoverable-despite-watermark',
+            type: 'backup',
+            inputDigest: 'digest',
+            input: { revision: 'r1' },
+            status: 'pending',
+            attempt: 0,
+            nextAttemptAt: new Date(0).toISOString(),
+            claimedAt: null,
+            remoteCommit: null,
+            lastError: null,
+            createdAt: new Date(0).toISOString(),
+            updatedAt: new Date(0).toISOString(),
+        };
+        const jobsDirectory = path.join(root, 'workflow', 'jobs');
+        fs.mkdirSync(jobsDirectory, { recursive: true });
+        fs.writeFileSync(path.join(jobsDirectory, `${record.id}.json`), JSON.stringify(record));
+        const watermarkPath = path.join(root, 'workflow', 'backup-state.json');
+        const corruptWatermark = '{ "contentSequence": "broken"';
+        fs.writeFileSync(watermarkPath, corruptWatermark, 'utf8');
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        const recovered = await recoverPersistedJobs();
+
+        expect(recovered.map((job) => job.id)).toContain(record.id);
+        expect(fs.readFileSync(watermarkPath, 'utf8')).toBe(corruptWatermark);
+        expect(consoleError).toHaveBeenCalledWith(
+            '[jobs-store] Invalid persisted state files detected; the worker keeps polling and leaves them untouched for repair:',
+            'workflow/backup-state.json'
+        );
+    });
+
     it('caps exponential retry delay and stops after the attempt limit with an error', async () => {
         createDataRoot();
         await createJob({ type: 'backup', input: { revision: 'r1' } });

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   EDITOR_BACKUP_VERSION,
+  EditorBackupFormatError,
   createEditorBackupPayload,
   createCurrentEditorRemoteBackupPackage,
   parseEditorBackupData,
@@ -384,10 +385,61 @@ describe('editor backup payload', () => {
     );
   });
 
+  it('rejects a payload whose manifest does not match its own data', async () => {
+    const dataRoot = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = dataRoot;
+    const payload = createEditorBackupPayload({
+      articles: [article],
+      navigation,
+      settings,
+    });
+    const tampered = {
+      ...payload,
+      manifest: {
+        ...payload.manifest,
+        resources: {
+          ...payload.manifest?.resources,
+          articles: { ...payload.manifest?.resources.articles, hash: '0'.repeat(64) },
+        },
+      },
+    };
+
+    expect(parseEditorBackupData(tampered)).toBeNull();
+    await expect(restoreEditorBackupPayload(tampered)).rejects.toBeInstanceOf(EditorBackupFormatError);
+    expect(fs.existsSync(path.join(dataRoot, 'articles'))).toBe(false);
+  });
+
+  it('rejects a payload whose manifest was computed for other data', () => {
+    const payload = createEditorBackupPayload({
+      articles: [article],
+      navigation,
+      settings,
+    });
+    const tampered = {
+      ...payload,
+      data: { ...payload.data, articles: [{ ...article, content: '# Changed after the backup' }] },
+    };
+
+    expect(() => parseEditorBackupDataOrThrow(tampered)).toThrow(
+      '备份 articles 数据与备份清单不一致。'
+    );
+  });
+
+  it('rejects a payload with a broken manifest envelope', async () => {
+    const payload = createEditorBackupPayload({
+      articles: [article],
+      navigation,
+      settings,
+    });
+
+    expect(parseEditorBackupData({ ...payload, manifest: { version: 99, resources: {} } })).toBeNull();
+    await expect(restoreEditorBackupPayload({ ...payload, manifest: 'not-a-manifest' }))
+      .rejects.toBeInstanceOf(EditorBackupFormatError);
+  });
+
   it('restores valid backup payloads into BLOG_DATA_ROOT', async () => {
     const dataRoot = createTempDataRoot();
     process.env.BLOG_DATA_ROOT = dataRoot;
-
     const result = await restoreEditorBackupPayload(
       createEditorBackupPayload({
         articles: [article],

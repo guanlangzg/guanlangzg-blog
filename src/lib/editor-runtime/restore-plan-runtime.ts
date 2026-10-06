@@ -3,8 +3,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeJsonAtomically } from '@/lib/atomic-json-writer';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
-import { applyRestorePlan, readCurrentRestoreState, RESTORE_SETTING_DEFAULTS, RestoreApplicationError, type RestoreChoice } from '@/lib/restoring/apply';
-import { createRestorePlan, type RestorePlan } from '@/lib/restoring/plan';
+import { applyRestorePlan, readCurrentRestoreState, RESTORE_SETTING_DEFAULTS, RestoreApplicationError, validateRestorableEditorData, type RestoreChoice } from '@/lib/restoring/apply';
+import { createRestorePlan, type RestorableEditorData, type RestorePlan } from '@/lib/restoring/plan';
 import { decodeBackupCommit } from '@/lib/editor-runtime/restore-backup';
 import type { RestoreResolution } from '@/lib/restoring/plan';
 
@@ -28,11 +28,28 @@ function planFilePath(planId: string): string {
   return path.join(plansRoot(), planId, 'plan.json');
 }
 
+/**
+ * A plan may only offer choices the apply step accepts. Applying an unsupported or inconsistent
+ * backup fails validation, so such a backup must be refused while the plan is still read-only.
+ */
+function assertPlanApplicableBackup(data: RestorableEditorData): void {
+  try {
+    validateRestorableEditorData(data);
+  } catch (error) {
+    throw new RestoreApplicationError(
+      422,
+      'INVALID_BACKUP',
+      error instanceof Error ? error.message : '备份数据无法用于恢复。',
+    );
+  }
+}
+
 export async function createStoredRestorePlan(backupCommit: string): Promise<{ plan: RestorePlan; planId: string }> {
-  // Decoding happens before anything is written, so an unsupported or corrupt backup
-  // cannot leave a half-created plan behind.
+  // Decoding and validating happen before anything is written, so an unsupported or corrupt
+  // backup cannot leave a half-created plan behind.
   const current = await readCurrentRestoreState();
   const backup = await decodeBackupCommit(backupCommit);
+  assertPlanApplicableBackup(backup.data);
   const plan = createRestorePlan(current.data, backup.data, {
     currentRevision: current.revision,
     backupCommit: backup.commit,

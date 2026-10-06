@@ -23,6 +23,7 @@ import {
 import { readBackupWatermark } from '@/lib/jobs/watermark';
 import {
   createNavigationIdentityMap,
+  normalizeNavigationUrl,
   type NavigationIdentityMap,
 } from '@/lib/navigation-identities';
 import { parseNavigationDataOrThrow } from '@/lib/navigation-data';
@@ -40,6 +41,7 @@ import {
   createRestoreContentDigest,
   createRestorePlan,
   type RestorableEditorData,
+  type RestoreConflict,
   type RestorePlan,
   type RestoreResolution,
 } from '@/lib/restoring/plan';
@@ -82,9 +84,10 @@ export interface RestoreApplicationResult {
 type StagedRestore = { directory: string };
 type MarkdownNode = {
   type: string;
+  value?: string;
   url?: string;
-  position?: { start: { offset?: number }; end: { offset?: number } };
   children?: MarkdownNode[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
 };
 
 function sha256(value: string | Uint8Array): string {
@@ -216,6 +219,75 @@ function mergedIdentity(
     ?? createNavigationIdentityMap([category]).categories[0]!;
 }
 
+function normalizeToolUrl(tool: Category['tools'][number]): string {
+  return normalizeNavigationUrl(tool.url);
+}
+
+/** Tool-level conflicts carry a normalized URL; category-level ones carry the category identity. */
+function isToolLevelNavigationConflict(conflict: RestoreConflict): boolean {
+  if (conflict.kind === 'navigation-ambiguous') return true;
+
+  return conflict.kind === 'navigation-identity' && !conflict.subject.navigationIdentity;
+}
+
+function replaceToolGroup(
+  tools: Category['tools'],
+  normalizedUrl: string,
+  desired: Category['tools'],
+): Category['tools'] {
+  const indexes = tools
+    .map((tool, index) => (normalizeToolUrl(tool) === normalizedUrl ? index : -1))
+    .filter((index) => index >= 0);
+  const remaining = tools.filter((_, index) => !indexes.includes(index));
+
+  remaining.splice(indexes[0] ?? remaining.length, 0, ...desired);
+
+  return remaining;
+}
+
+/**
+ * Applies every tool-level choice to the tool list. Each choice decides the whole URL group:
+ * keep-current keeps the current tools, use-backup takes the backup tools, keep-both keeps both.
+ * New backup entries without a matching URL are appended, keeping their relative order.
+ */
+function mergeCategoryTools(
+  baseTools: Category['tools'],
+  currentCategory: Category,
+  backupCategory: Category,
+  conflicts: readonly RestoreConflict[],
+  choices: Map<string, RestoreResolution>,
+): Category['tools'] {
+  const handledUrls = new Set<string>();
+  let tools = [...baseTools];
+
+  for (const conflict of conflicts) {
+    const normalizedUrl = conflict.subject.normalizedUrl;
+    if (!normalizedUrl || handledUrls.has(normalizedUrl)) continue;
+    handledUrls.add(normalizedUrl);
+
+    const resolution = choices.get(conflict.conflictId);
+    const currentGroup = currentCategory.tools.filter((tool) => normalizeToolUrl(tool) === normalizedUrl);
+    const backupGroup = backupCategory.tools.filter((tool) => normalizeToolUrl(tool) === normalizedUrl);
+    const desired = resolution === 'use-backup'
+      ? backupGroup
+      : resolution === 'keep-both'
+        ? [...currentGroup, ...backupGroup]
+        : currentGroup;
+
+    tools = replaceToolGroup(tools, normalizedUrl, desired);
+  }
+
+  for (const backupTool of backupCategory.tools) {
+    const normalizedUrl = normalizeToolUrl(backupTool);
+
+    if (handledUrls.has(normalizedUrl) || tools.some((tool) => normalizeToolUrl(tool) === normalizedUrl)) continue;
+
+    tools.push(backupTool);
+  }
+
+  return tools;
+}
+
 function mergeNavigation(
   current: RestorableEditorData,
   backup: RestorableEditorData,
@@ -225,43 +297,54 @@ function mergeNavigation(
   const navigation = [...current.navigation];
   const identities = navigation.map((category) => mergedIdentity(category, current.navigationIdentities));
   const usedSlugs = new Set(navigation.map((item) => item.slug));
+  const toolConflicts = plan.conflicts.filter(isToolLevelNavigationConflict);
 
   for (const backupCategory of backup.navigation) {
     const backupId = categoryIdentity(backup.navigationIdentities, backupCategory);
-    const currentIndex = identities.findIndex((item) => item.id === backupId)
-      >= 0 ? identities.findIndex((item) => item.id === backupId)
+    const identityIndex = identities.findIndex((item) => item.id === backupId);
+    const currentIndex = identityIndex >= 0
+      ? identityIndex
       : navigation.findIndex((item) => item.slug === backupCategory.slug);
-    const categoryConflicts = plan.conflicts.filter((entry) =>
-      (entry.kind === 'navigation-identity' && entry.subject.navigationIdentity === backupId)
-      || (entry.kind === 'navigation-ambiguous' && entry.subject.categorySlug === backupCategory.slug),
-    );
-    if (currentIndex < 0 && categoryConflicts.length === 0) {
+
+    if (currentIndex < 0) {
       navigation.push(backupCategory);
       identities.push(mergedIdentity(backupCategory, backup.navigationIdentities));
       usedSlugs.add(backupCategory.slug);
       continue;
     }
-    if (categoryConflicts.length === 0) continue;
 
-    const identityConflict = categoryConflicts.find((entry) => entry.kind === 'navigation-identity') ?? categoryConflicts[0];
-    const resolution = identityConflict ? choices.get(identityConflict.conflictId) : undefined;
-    if (resolution === 'keep-current') continue;
+    const categoryConflict = plan.conflicts.find((entry) =>
+      entry.kind === 'navigation-identity' && entry.subject.navigationIdentity === backupId);
+    const resolution = categoryConflict ? choices.get(categoryConflict.conflictId) : undefined;
+
     if (resolution === 'keep-both') {
-      const slug = uniqueNavigationSlug(backupCategory.slug, identityConflict?.conflictId ?? backupId, usedSlugs);
+      const slug = uniqueNavigationSlug(backupCategory.slug, categoryConflict?.conflictId ?? backupId, usedSlugs);
       const copy = { ...backupCategory, slug };
       navigation.push(copy);
       identities.push(createNavigationIdentityMap([copy]).categories[0]!);
       continue;
     }
-    if (currentIndex >= 0) {
-      navigation[currentIndex] = backupCategory;
+
+    const currentCategory = navigation[currentIndex];
+    const useBackupCategory = resolution === 'use-backup';
+    const shell = useBackupCategory ? backupCategory : currentCategory;
+    const tools = mergeCategoryTools(
+      useBackupCategory ? backupCategory.tools : currentCategory.tools,
+      currentCategory,
+      backupCategory,
+      toolConflicts.filter((entry) => entry.subject.categorySlug === backupCategory.slug),
+      choices,
+    );
+
+    navigation[currentIndex] = { ...shell, tools };
+
+    if (useBackupCategory) {
       identities[currentIndex] = mergedIdentity(backupCategory, backup.navigationIdentities);
-    } else {
-      navigation.push(backupCategory);
-      identities.push(mergedIdentity(backupCategory, backup.navigationIdentities));
     }
-    usedSlugs.add(backupCategory.slug);
+
+    usedSlugs.add(shell.slug);
   }
+
   return { navigation, identities: { schemaVersion: 1, categories: identities } };
 }
 
@@ -316,36 +399,131 @@ function managedPathFromUrl(value: string): string | null {
   return mediaPath && safeRestoredPath(mediaPath) ? mediaPath : null;
 }
 
-function collectMarkdownUrls(node: MarkdownNode, result: MarkdownNode[]): void {
-  if ((node.type === 'link' || node.type === 'image') && node.url && node.position) result.push(node);
-  node.children?.forEach((child) => collectMarkdownUrls(child, result));
+const LINK_DESTINATION_MARKER = '](';
+const DEFINITION_DESTINATION_MARKER = ']:';
+
+function destinationMarkerFor(node: MarkdownNode): string | null {
+  if (node.type === 'definition') return DEFINITION_DESTINATION_MARKER;
+  if (node.type === 'link' || node.type === 'image') return LINK_DESTINATION_MARKER;
+  return null;
+}
+
+function collectMarkdownReferences(node: MarkdownNode, references: MarkdownNode[], html: MarkdownNode[]): void {
+  if (destinationMarkerFor(node) && node.url && node.position) {
+    references.push(node);
+  } else if (node.type === 'html' && node.value && node.position) {
+    html.push(node);
+  }
+
+  node.children?.forEach((child) => collectMarkdownReferences(child, references, html));
+}
+
+function skipWhitespace(value: string, index: number): number {
+  let cursor = index;
+
+  while (cursor < value.length && /\s/.test(value[cursor] as string)) cursor += 1;
+
+  return cursor;
+}
+
+/** After the destination only an optional title and the closing bracket may remain. */
+function hasExactDestinationEnding(tail: string, isDefinition: boolean): boolean {
+  const title = /^\s*(?:"[^"]*"|'[^']*'|\([^)]*\))?/.exec(tail);
+
+  if (!title) return false;
+
+  const remainder = tail.slice(title[0].length);
+
+  return isDefinition ? /^\s*$/.test(remainder) : /^\s*\)\s*$/.test(remainder);
+}
+
+/**
+ * Offset of a link/image/definition destination inside its own source fragment. The
+ * offset is only accepted when the exact URL is followed by an optional title and the
+ * node's closing bracket, so link text or a title that itself contains "](“ can never be
+ * mistaken for the destination. Returns null when no position is provably correct.
+ */
+function destinationOffsetWithin(
+  fragment: string,
+  node: MarkdownNode,
+  marker: string,
+  url: string,
+  minOffset: number,
+): number | null {
+  let offset: number | null = null;
+
+  for (let index = fragment.indexOf(marker); index >= 0; index = fragment.indexOf(marker, index + 1)) {
+    if (index < minOffset) continue;
+
+    let cursor = skipWhitespace(fragment, index + marker.length);
+    if (fragment[cursor] === '<') cursor += 1;
+
+    const destinationStart = cursor;
+    if (!fragment.startsWith(url, cursor)) continue;
+
+    cursor += url.length;
+    if (fragment[cursor] === '>') cursor += 1;
+    if (!hasExactDestinationEnding(fragment.slice(cursor), node.type === 'definition')) continue;
+
+    offset = destinationStart;
+  }
+
+  return offset;
+}
+
+/** End of a link/image label inside its fragment, so an inner node's destination is never picked. */
+function labelEndWithin(node: MarkdownNode): number {
+  const nodeStart = node.position?.start.offset ?? 0;
+  const lastChild = node.children?.[node.children.length - 1];
+  const childEnd = lastChild?.position?.end.offset;
+
+  return typeof childEnd === 'number' ? Math.max(0, childEnd - nodeStart) : 0;
 }
 
 function rewriteMarkdownMedia(markdown: string, pathMap: Map<string, string>): string {
+  if (pathMap.size === 0) return markdown;
+
   const tree = unified().use(remarkParse).use(remarkGfm).parse(markdown) as unknown as MarkdownNode;
-  const nodes: MarkdownNode[] = [];
-  collectMarkdownUrls(tree, nodes);
+  const references: MarkdownNode[] = [];
+  const htmlNodes: MarkdownNode[] = [];
+  collectMarkdownReferences(tree, references, htmlNodes);
   const replacements: Array<{ start: number; end: number; value: string }> = [];
-  for (const node of nodes) {
+
+  for (const node of references) {
     const start = node.position?.start.offset;
     const end = node.position?.end.offset;
     if (start === undefined || end === undefined || !node.url) continue;
     const managedPath = managedPathFromUrl(node.url);
     const nextPath = managedPath ? pathMap.get(managedPath) : undefined;
     if (!managedPath || !nextPath) continue;
-    const updatedUrl = node.url.replace(`/media/${managedPath}`, `/media/${nextPath}`);
-    const fragment = markdown.slice(start, end);
-    // The destination follows the last "](“ in the fragment. A link wrapping an
-    // image whose URL equals the link's own destination also contains an earlier
-    // "](“, and searching forward from that first one lands on the inner URL,
-    // producing two overlapping replacements that corrupt the markdown.
-    const destinationStart = fragment.lastIndexOf('](');
-    const urlOffset = destinationStart >= 0
-      ? fragment.indexOf(node.url, destinationStart + 2)
-      : fragment.indexOf(node.url);
-    if (urlOffset < 0) failInvalidBackup(`无法精确改写受管媒体引用：${managedPath}`);
-    replacements.push({ start: start + urlOffset, end: start + urlOffset + node.url.length, value: updatedUrl });
+    const marker = destinationMarkerFor(node);
+    if (!marker) continue;
+    const urlOffset = destinationOffsetWithin(
+      markdown.slice(start, end),
+      node,
+      marker,
+      node.url,
+      labelEndWithin(node),
+    );
+    if (urlOffset === null) failInvalidBackup(`无法精确改写受管媒体引用：${managedPath}`);
+    replacements.push({
+      start: start + urlOffset,
+      end: start + urlOffset + node.url.length,
+      value: node.url.replace(`/media/${managedPath}`, `/media/${nextPath}`),
+    });
   }
+
+  // Raw HTML is not part of the verified mapping: rewriting it by text search would be a
+  // guess, and leaving it untouched would silently point the restored article at other bytes.
+  for (const node of htmlNodes) {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    if (start === undefined || end === undefined) continue;
+    const fragment = markdown.slice(start, end);
+    const referenced = [...pathMap.keys()].find((mediaPath) => fragment.includes(`/media/${mediaPath}`));
+    if (referenced) failInvalidBackup(`无法精确改写受管媒体引用：${referenced}（原始 HTML）`);
+  }
+
   let result = markdown;
   for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
     result = `${result.slice(0, replacement.start)}${replacement.value}${result.slice(replacement.end)}`;
@@ -462,6 +640,20 @@ function assertKnownObjectKeys(value: unknown, allowed: readonly string[], label
   if (unknown.length > 0) failInvalidBackup(`${label}包含不支持字段：${unknown.join(', ')}`);
 }
 
+/** Validates decoded restore data with the rules the apply step uses, without applying anything. */
+export function validateRestorableEditorData(data: RestorableEditorData): RestorableEditorData {
+  return validateData(data);
+}
+
+/** Parser failures are data failures: they must reject the restore, never surface as an internal error. */
+function wrapInvalidBackup<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    return failInvalidBackup(error instanceof Error ? error.message : '恢复数据格式无效。');
+  }
+}
+
 function validateData(data: RestorableEditorData): RestorableEditorData {
   const articleKeys = ['id', 'slug', 'title', 'date', 'description', 'tags', 'content', 'createdAt', 'updatedAt', 'kind', 'status', 'category', 'series', 'featured', 'updatedDate', 'sourceLinks', 'revisionNotes', 'templateId'];
   const categoryKeys = ['name', 'icon', 'slug', 'tools'];
@@ -477,9 +669,9 @@ function validateData(data: RestorableEditorData): RestorableEditorData {
   data.media.manifest.assets.forEach((asset) => assertKnownObjectKeys(asset, assetKeys, '媒体资产'));
   data.media.files.forEach((file) => assertKnownObjectKeys(file, ['path', 'bytes'], '媒体文件'));
 
-  const articles = parseArticlesDataOrThrow(data.articles);
-  const navigation = parseNavigationDataOrThrow(data.navigation);
-  const settings = parseSiteSettingsOrThrow(data.settings);
+  const articles = wrapInvalidBackup(() => parseArticlesDataOrThrow(data.articles));
+  const navigation = wrapInvalidBackup(() => parseNavigationDataOrThrow(data.navigation));
+  const settings = wrapInvalidBackup(() => parseSiteSettingsOrThrow(data.settings));
   validateArticlePaths(articles);
   validateIdentityMap({ ...data, articles, navigation, settings });
   if (stableJsonStringify(articles) !== stableJsonStringify(data.articles)

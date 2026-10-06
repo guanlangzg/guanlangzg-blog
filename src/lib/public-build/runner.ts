@@ -71,7 +71,7 @@ function validateLocalTarget(value: unknown, label: string): string {
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
-function validatePublicPath(value: unknown, label: string, allowBlogPath = false): string {
+function validatePublicPath(value: unknown, label: string, allowRemovedPath = false): string {
     const route = requiredString(value, label);
     if (!route.startsWith('/') || route.startsWith('//') || route.includes('\\') || route.includes('?') || route.includes('#') || hasC0ControlCharacter(route)) {
         throw new Error(`${label} must be a local absolute path`);
@@ -83,8 +83,13 @@ function validatePublicPath(value: unknown, label: string, allowBlogPath = false
     }
     const segments = decoded.split('/').filter(Boolean);
     const reserved = segments.length > 0 && PUBLIC_PATH_RESERVED.has(segments[0].toLowerCase());
-    if (!segments.length || (reserved && !(allowBlogPath && segments[0].toLowerCase() === 'blog'))) throw new Error(`${label} uses a reserved public path`);
-    if (allowBlogPath && (segments[0].toLowerCase() !== 'blog' || segments.length < 2)) throw new Error(`${label} must be a legacy /blog/<slug>/ path`);
+    const allowReservedForRemoval = allowRemovedPath
+        && ['blog', 'posts'].includes(segments[0]?.toLowerCase() ?? '')
+        && segments.length === 2;
+    if (!segments.length || (reserved && !allowReservedForRemoval)) throw new Error(`${label} uses a reserved public path`);
+    if (allowRemovedPath && !allowReservedForRemoval) {
+        throw new Error(`${label} must be a /posts/<slug>/ or legacy /blog/<slug>/ path`);
+    }
     return route;
 }
 
@@ -119,6 +124,20 @@ function resolveRemovedPaths(value: unknown): string[] | undefined {
     const paths = value.map((route, index) => validatePublicPath(route, `removedPaths[${index}]`, true));
     if (new Set(paths).size !== paths.length) throw new Error('removedPaths contains duplicate paths');
     return paths;
+}
+
+/** The artifact export writes one file per path, so each path may have exactly one owner. */
+function assertSinglePathOwner(snapshot: PublicSiteSnapshot): void {
+    const owners = new Map<string, string>();
+    const claim = (route: string, owner: string) => {
+        const key = decodeURIComponent(route).replace(/\/+$/, '');
+        const existing = owners.get(key);
+        if (existing) throw new Error(`${owner} and ${existing} both claim the public path ${route}`);
+        owners.set(key, owner);
+    };
+    for (const post of snapshot.posts) claim(`/posts/${encodeURIComponent(post.slug)}/`, 'an article page');
+    for (const redirect of snapshot.redirects ?? []) claim(redirect.from, 'a rename redirect');
+    for (const route of snapshot.removedPaths ?? []) claim(route, 'a removal notice');
 }
 
 export function validatePublicSiteSnapshot(value: unknown): PublicSiteSnapshot {
@@ -182,7 +201,7 @@ export function validatePublicSiteSnapshot(value: unknown): PublicSiteSnapshot {
             }),
         };
     });
-    return {
+    const resolved: PublicSiteSnapshot = {
         releaseId,
         site: { title: requiredString(site.title, 'site.title'), description: requiredString(site.description, 'site.description') },
         posts,
@@ -190,6 +209,8 @@ export function validatePublicSiteSnapshot(value: unknown): PublicSiteSnapshot {
         ...(snapshot.redirects !== undefined ? { redirects: resolveRedirects(snapshot.redirects) } : {}),
         ...(snapshot.removedPaths !== undefined ? { removedPaths: resolveRemovedPaths(snapshot.removedPaths) } : {}),
     };
+    assertSinglePathOwner(resolved);
+    return resolved;
 }
 
 export function getStaticAssetUrl(releaseId: string, relativePath: string): string {

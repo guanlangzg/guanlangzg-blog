@@ -3,8 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Article } from '@/app/types/article';
+import { DEFAULT_SITE_SETTINGS } from '@/lib/site-settings';
+import { computeCandidateDigest } from '@/lib/publishing/snapshot';
+import { writeLivePointer, writeRelease } from '@/lib/publishing/store';
+import type { SiteSnapshot } from '@/lib/publishing/types';
 
 const ORIGINAL_BLOG_DATA_ROOT = process.env.BLOG_DATA_ROOT;
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+const ORIGINAL_BLOG_NAVIGATION_DOCKER = process.env.BLOG_NAVIGATION_DOCKER;
 const tempDirectories: string[] = [];
 
 function createTempDataRoot(articles?: Article[]): string {
@@ -22,6 +28,23 @@ function createTempDataRoot(articles?: Article[]): string {
   }
 
   return root;
+}
+
+function writeLiveSnapshot(root: string, snapshot: SiteSnapshot): void {
+  const releaseId = 'live-reader-release';
+  const candidateDigest = computeCandidateDigest(snapshot);
+  const artifactDigest = 'a'.repeat(64);
+  const now = '2026-10-05T00:00:00.000Z';
+  writeRelease({
+    schemaVersion: 1, id: releaseId, scope: { kind: 'bootstrap', articleIds: [] }, baseLiveReleaseId: null,
+    selectedRevision: 'b'.repeat(64), candidateDigest, artifactDigest, status: 'live', backupProof: null,
+    publicCommitSha: 'c'.repeat(40), workflowRunId: 1, workflowRunAttempt: 1, retryFromAttempt: null,
+    error: null, createdAt: now, updatedAt: now,
+  }, snapshot);
+  writeLivePointer({
+    schemaVersion: 1, releaseId, candidateDigest, artifactDigest, publicCommitSha: 'c'.repeat(40),
+    workflowRunId: 1, workflowRunAttempt: 1, verifiedAt: now,
+  });
 }
 
 function createArticle(id: string, title: string): Article {
@@ -50,6 +73,9 @@ afterEach(() => {
   } else {
     process.env.BLOG_DATA_ROOT = ORIGINAL_BLOG_DATA_ROOT;
   }
+  if (ORIGINAL_NODE_ENV !== undefined) vi.stubEnv('NODE_ENV', ORIGINAL_NODE_ENV);
+  if (ORIGINAL_BLOG_NAVIGATION_DOCKER === undefined) delete process.env.BLOG_NAVIGATION_DOCKER;
+  else process.env.BLOG_NAVIGATION_DOCKER = ORIGINAL_BLOG_NAVIGATION_DOCKER;
 
   while (tempDirectories.length > 0) {
     fs.rmSync(tempDirectories.pop() as string, { recursive: true, force: true });
@@ -263,6 +289,47 @@ describe('markdown runtime article source', () => {
         content: '## Searchable body content',
       },
     ]);
+  });
+
+  it('serves production reader articles only from the verified live snapshot', async () => {
+    const draft = createTempDataRoot([{
+      id: 'draft-only', slug: 'draft-only', title: 'Draft Only', date: '2026-10-05',
+      description: '', tags: [], content: 'mutable draft body', createdAt: 1, updatedAt: 1,
+    }]);
+    process.env.BLOG_DATA_ROOT = draft;
+    vi.stubEnv('NODE_ENV', 'test');
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const liveSnapshot: SiteSnapshot = {
+      schemaVersion: 1, siteId: 'live-site',
+      articles: [{ ...createArticle('live-article', 'Live Release'), slug: 'live-article', content: 'sealed release body', status: 'seedling' }],
+      navigation: [], settings: { ...DEFAULT_SITE_SETTINGS }, media: [], redirects: [], removedPaths: [],
+    };
+    writeLiveSnapshot(draft, liveSnapshot);
+
+    const { getPostBySlugArrayAsync, getPostsAsync, getSearchablePostsAsync } = await importMarkdownModule();
+
+    await expect(getPostsAsync()).resolves.toEqual([expect.objectContaining({ slug: 'live-article', title: 'Live Release' })]);
+    await expect(getPostBySlugArrayAsync(['live-article'])).resolves.toEqual(expect.objectContaining({ content: 'sealed release body' }));
+    await expect(getPostBySlugArrayAsync(['draft-only'])).resolves.toBeNull();
+    await expect(getSearchablePostsAsync()).resolves.toEqual([expect.objectContaining({ content: 'sealed release body' })]);
+  });
+
+  it('does not serve a live article under a multi-segment slug URL', async () => {
+    const draft = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = draft;
+    vi.stubEnv('NODE_ENV', 'test');
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const liveSnapshot: SiteSnapshot = {
+      schemaVersion: 1, siteId: 'live-site',
+      articles: [{ ...createArticle('live-article', 'Live Release'), slug: 'live-article', content: 'sealed release body', status: 'published' }],
+      navigation: [], settings: { ...DEFAULT_SITE_SETTINGS }, media: [], redirects: [], removedPaths: [],
+    };
+    writeLiveSnapshot(draft, liveSnapshot);
+
+    const { getPostBySlugArray, getPostBySlugArrayAsync } = await importMarkdownModule();
+
+    await expect(getPostBySlugArrayAsync(['live-article', 'extra'])).resolves.toBeNull();
+    expect(getPostBySlugArray(['live-article', 'extra'])).toBeNull();
   });
 
   it('returns null instead of throwing when a post slug cannot be decoded', async () => {

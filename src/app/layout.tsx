@@ -3,6 +3,7 @@ import { JetBrains_Mono, IBM_Plex_Sans } from 'next/font/google';
 import './globals.css';
 import { AppShell } from './components/layout';
 import { readSiteSettingsFromDiskAsync } from '@/lib/editor-data-storage';
+import { getPublicLiveSnapshot, isLiveReaderRuntime } from '@/lib/live-public-reader';
 import { createOgImagePath, getSiteUrl } from '@/lib/site-url';
 import { THEME_INIT_SCRIPT } from '@/lib/theme-init-script';
 
@@ -18,7 +19,7 @@ const ibmPlex = IBM_Plex_Sans({
 });
 
 export async function generateMetadata(): Promise<Metadata> {
-    const settings = await readSiteSettingsFromDiskAsync();
+    const settings = isLiveReaderRuntime() ? getPublicLiveSnapshot().settings : await readSiteSettingsFromDiskAsync();
     const ogImage = createOgImagePath({
         title: settings.siteName,
         description: settings.siteDescription,

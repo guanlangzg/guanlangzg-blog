@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Plus, Download, Upload, RotateCcw, Folder, Trash2, Edit2, X, Check } from 'lucide-react';
 import { useNavigationData } from '@/app/hooks/useNavigationData';
 import { useTagsText } from '@/app/hooks/useTagsText';
-import { Tool } from '@/app/types/navigation';
+import { Category, Tool } from '@/app/types/navigation';
 import { EmptyState, StatusMessage } from '@/app/components/ui';
 import { ToolItem } from './components/ToolItem';
 import { ToolFieldError } from './components/ToolFieldError';
@@ -30,6 +30,30 @@ import {
   editorInputClassName,
 } from '../../components/EditorShell';
 
+// Indexes shift when an entry is removed or the whole list is replaced, so
+// editing/deleting state must be bound to the entry itself. A category keeps
+// its identity while only its tools change, and a tool keeps its identity
+// while the page re-renders around it.
+function createCategoryIdentity(category: Category): string {
+  return [category.name, category.icon, category.slug].join('\u0000');
+}
+
+function createToolIdentity(tool: Tool): string {
+  return [tool.icon, tool.title, tool.description, tool.url, tool.tags.join('\u0000')].join('\u0000');
+}
+
+function createEntryKeys<T>(values: readonly T[], createIdentity: (value: T) => string): string[] {
+  const occurrences = new Map<string, number>();
+
+  return values.map((value) => {
+    const identity = createIdentity(value);
+    const occurrence = occurrences.get(identity) ?? 0;
+    occurrences.set(identity, occurrence + 1);
+
+    return `${identity}\u0001${occurrence}`;
+  });
+}
+
 export default function NavigationEditorPage() {
   const {
     data,
@@ -48,10 +72,10 @@ export default function NavigationEditorPage() {
     lastRemoteSaveError,
   } = useNavigationData();
 
-  const [editingCategory, setEditingCategory] = useState<number | null>(null);
-  const [editingTool, setEditingTool] = useState<{ categoryIndex: number; toolIndex: number } | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingTool, setEditingTool] = useState<{ categoryId: string; toolId: string } | null>(null);
   const [showAddCategory, setShowAddCategory] = useState(false);
-  const [showAddTool, setShowAddTool] = useState<number | null>(null);
+  const [addingToolCategoryId, setAddingToolCategoryId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [categoryFormError, setCategoryFormError] = useState('');
   const [categoryEditName, setCategoryEditName] = useState('');
@@ -70,6 +94,33 @@ export default function NavigationEditorPage() {
   const [toolTagsText, handleToolTagsTextChange] = useTagsText(
     toolForm.tags,
     (tags) => setToolForm((current) => ({ ...current, tags }))
+  );
+
+  const categoryIds = useMemo(() => createEntryKeys(data, createCategoryIdentity), [data]);
+  const toolIdsByCategory = useMemo(
+    () => data.map((category) => createEntryKeys(category.tools, createToolIdentity)),
+    [data]
+  );
+  const categoryIndexById = useMemo(() => {
+    const indexes = new Map<string, number>();
+
+    categoryIds.forEach((id, index) => indexes.set(id, index));
+
+    return indexes;
+  }, [categoryIds]);
+  const findToolLocation = useCallback(
+    (categoryId: string, toolId: string): { categoryIndex: number; toolIndex: number } | null => {
+      const categoryIndex = categoryIndexById.get(categoryId);
+
+      if (categoryIndex === undefined) {
+        return null;
+      }
+
+      const toolIndex = toolIdsByCategory[categoryIndex]?.indexOf(toolId) ?? -1;
+
+      return toolIndex < 0 ? null : { categoryIndex, toolIndex };
+    },
+    [categoryIndexById, toolIdsByCategory]
   );
 
   const handleAddCategory = useCallback(() => {
@@ -92,37 +143,48 @@ export default function NavigationEditorPage() {
     setShowAddCategory(false);
   }, [categoryForm, addCategory]);
 
-  const startEditingCategory = useCallback((categoryIndex: number, categoryName: string) => {
-    setEditingCategory(categoryIndex);
+  const startEditingCategory = useCallback((categoryId: string, categoryName: string) => {
+    setEditingCategoryId(categoryId);
     setCategoryEditName(categoryName);
     setCategoryEditError('');
   }, []);
 
   const cancelEditingCategory = useCallback(() => {
-    setEditingCategory(null);
+    setEditingCategoryId(null);
     setCategoryEditName('');
     setCategoryEditError('');
   }, []);
 
-  const handleSaveCategory = useCallback(
-    (categoryIndex: number) => {
-      const nextName = categoryEditName.trim();
+  const handleSaveCategory = useCallback(() => {
+    const categoryIndex = editingCategoryId ? categoryIndexById.get(editingCategoryId) : undefined;
 
-      if (!nextName) {
-        setCategoryEditError('请填写分类名称。');
-        focusCategoryEditField(categoryIndex);
+    if (categoryIndex === undefined) {
+      cancelEditingCategory();
+      return;
+    }
+
+    const nextName = categoryEditName.trim();
+
+    if (!nextName) {
+      setCategoryEditError('请填写分类名称。');
+      focusCategoryEditField(categoryIndex);
+      return;
+    }
+
+    updateCategory(categoryIndex, { name: nextName });
+    setMessage({ tone: 'success', text: '分类名称已更新。' });
+    cancelEditingCategory();
+  }, [cancelEditingCategory, categoryEditName, categoryIndexById, editingCategoryId, updateCategory]);
+
+  const handleAddTool = useCallback(
+    (categoryId: string) => {
+      const categoryIndex = categoryIndexById.get(categoryId);
+
+      if (categoryIndex === undefined) {
+        setAddingToolCategoryId(null);
         return;
       }
 
-      updateCategory(categoryIndex, { name: nextName });
-      setMessage({ tone: 'success', text: '分类名称已更新。' });
-      cancelEditingCategory();
-    },
-    [cancelEditingCategory, categoryEditName, updateCategory]
-  );
-
-  const handleAddTool = useCallback(
-    (categoryIndex: number) => {
       const normalizedTool = {
         ...toolForm,
         icon: toolForm.icon.trim() || 'link',
@@ -151,9 +213,9 @@ export default function NavigationEditorPage() {
       });
       setToolFormError(null);
       setMessage({ tone: 'success', text: '工具链接已添加。' });
-      setShowAddTool(null);
+      setAddingToolCategoryId(null);
     },
-    [toolForm, addTool]
+    [addTool, categoryIndexById, toolForm]
   );
 
   const handleExport = useCallback(() => {
@@ -175,8 +237,8 @@ export default function NavigationEditorPage() {
     setMessage({ tone: 'info', text: '导航数据已重置为种子数据。' });
   }, [resetToDefault]);
 
-  const handleDeleteCategory = useCallback((categoryIndex: number) => {
-    const confirmKey = `category:${categoryIndex}`;
+  const handleDeleteCategory = useCallback((categoryId: string) => {
+    const confirmKey = `category:${categoryId}`;
 
     if (deleteConfirm !== confirmKey) {
       setDeleteConfirm(confirmKey);
@@ -187,15 +249,16 @@ export default function NavigationEditorPage() {
       return;
     }
 
-    const deleted = deleteCategory(categoryIndex);
+    const categoryIndex = categoryIndexById.get(categoryId);
+    const deleted = categoryIndex === undefined ? false : deleteCategory(categoryIndex);
     setDeleteConfirm(null);
     setMessage(deleted
       ? { tone: 'success', text: '分类已删除。' }
       : { tone: 'danger', text: '分类删除失败。' });
-  }, [deleteCategory, deleteConfirm]);
+  }, [categoryIndexById, deleteCategory, deleteConfirm]);
 
-  const handleDeleteTool = useCallback((categoryIndex: number, toolIndex: number) => {
-    const confirmKey = `tool:${categoryIndex}:${toolIndex}`;
+  const handleDeleteTool = useCallback((categoryId: string, toolId: string) => {
+    const confirmKey = `tool:${categoryId}:${toolId}`;
 
     if (deleteConfirm !== confirmKey) {
       setDeleteConfirm(confirmKey);
@@ -206,12 +269,15 @@ export default function NavigationEditorPage() {
       return;
     }
 
-    const deleted = deleteTool(categoryIndex, toolIndex);
+    const location = findToolLocation(categoryId, toolId);
+    const deleted = location
+      ? deleteTool(location.categoryIndex, location.toolIndex)
+      : false;
     setDeleteConfirm(null);
     setMessage(deleted
       ? { tone: 'success', text: '工具链接已删除。' }
       : { tone: 'danger', text: '工具链接删除失败。' });
-  }, [deleteConfirm, deleteTool]);
+  }, [deleteConfirm, deleteTool, findToolLocation]);
 
   const handleImport = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -408,10 +474,14 @@ export default function NavigationEditorPage() {
           />
         ) : (
           <div className="space-y-4">
-            {data.map((category, categoryIndex) => (
-              <EditorPanel key={categoryIndex} className="overflow-hidden">
+            {data.map((category, categoryIndex) => {
+              const categoryId = categoryIds[categoryIndex];
+              const toolIds = toolIdsByCategory[categoryIndex];
+
+              return (
+              <EditorPanel key={categoryId} className="overflow-hidden">
                 <div className="flex flex-col gap-3 border-b border-border bg-background/70 px-4 py-3 md:flex-row md:items-center md:justify-between">
-                  {editingCategory === categoryIndex ? (
+                  {editingCategoryId === categoryId ? (
                     <label className="flex-1">
                       <span className={editorFieldLabelClassName()}>分类名称</span>
                       <input
@@ -425,7 +495,7 @@ export default function NavigationEditorPage() {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
-                            handleSaveCategory(categoryIndex);
+                            handleSaveCategory();
                           }
 
                           if (e.key === 'Escape') {
@@ -454,11 +524,11 @@ export default function NavigationEditorPage() {
                   )}
 
                   <div className="flex w-full items-center justify-between gap-2 md:w-auto md:justify-end">
-                    {editingCategory === categoryIndex ? (
+                    {editingCategoryId === categoryId ? (
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => handleSaveCategory(categoryIndex)}
+                          onClick={handleSaveCategory}
                           className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-token-card bg-accent text-accent-fg transition-colors hover:bg-accent-600 focus:ring-2 focus:ring-link focus:ring-offset-2 sm:min-h-9 sm:min-w-9"
                           aria-label={`保存分类：${category.name}`}
                         >
@@ -478,7 +548,7 @@ export default function NavigationEditorPage() {
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => startEditingCategory(categoryIndex, category.name)}
+                            onClick={() => startEditingCategory(categoryId, category.name)}
                             className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-token-card text-subtle transition-colors hover:bg-accent-50 hover:text-accent focus:ring-2 focus:ring-link focus:ring-offset-2 sm:min-h-9 sm:min-w-9"
                             aria-label={`编辑分类：${category.name}`}
                           >
@@ -486,17 +556,17 @@ export default function NavigationEditorPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleDeleteCategory(categoryIndex)}
-                            className={deleteConfirm === `category:${categoryIndex}`
+                            onClick={() => handleDeleteCategory(categoryId)}
+                            className={deleteConfirm === `category:${categoryId}`
                               ? 'inline-flex min-h-11 min-w-11 items-center justify-center rounded-token-card bg-error-50 text-error-600 transition-colors focus:ring-2 focus:ring-link focus:ring-offset-2 sm:min-h-9 sm:min-w-9'
                               : 'inline-flex min-h-11 min-w-11 items-center justify-center rounded-token-card text-subtle transition-colors hover:bg-error-50 hover:text-error-600 focus:ring-2 focus:ring-link focus:ring-offset-2 sm:min-h-9 sm:min-w-9'}
-                            aria-label={`${deleteConfirm === `category:${categoryIndex}` ? '确认删除分类' : '删除分类'}：${category.name}`}
+                            aria-label={`${deleteConfirm === `category:${categoryId}` ? '确认删除分类' : '删除分类'}：${category.name}`}
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>
                         <EditorButton
-                          onClick={() => setShowAddTool(categoryIndex)}
+                          onClick={() => setAddingToolCategoryId(categoryId)}
                           className="whitespace-nowrap px-3 py-1.5"
                           variant="accent"
                         >
@@ -508,7 +578,7 @@ export default function NavigationEditorPage() {
                   </div>
                 </div>
 
-                {showAddTool === categoryIndex && (
+                {addingToolCategoryId === categoryId && (
                   <section
                     className="border-b border-border bg-accent-50/60 p-3"
                     aria-labelledby={`new-tool-${categoryIndex}-heading`}
@@ -617,13 +687,13 @@ export default function NavigationEditorPage() {
                     ) : null}
                     <div className="mt-3 flex gap-2">
                       <EditorButton
-                        onClick={() => handleAddTool(categoryIndex)}
+                        onClick={() => handleAddTool(categoryId)}
                         variant="primary"
                       >
                         确认添加
                       </EditorButton>
                       <EditorButton
-                        onClick={() => setShowAddTool(null)}
+                        onClick={() => setAddingToolCategoryId(null)}
                         variant="ghost"
                       >
                         取消
@@ -633,18 +703,21 @@ export default function NavigationEditorPage() {
                 )}
 
                 <div className="divide-y divide-border-soft">
-                  {category.tools.map((tool, toolIndex) => (
+                  {category.tools.map((tool, toolIndex) => {
+                    const toolId = toolIds[toolIndex];
+
+                    return (
                     <ToolItem
-                      key={toolIndex}
+                      key={toolId}
                       categoryIndex={categoryIndex}
                       toolIndex={toolIndex}
                       tool={tool}
-                      onEdit={() => setEditingTool({ categoryIndex, toolIndex })}
-                      onDelete={() => handleDeleteTool(categoryIndex, toolIndex)}
-                      isDeleting={deleteConfirm === `tool:${categoryIndex}:${toolIndex}`}
+                      onEdit={() => setEditingTool({ categoryId, toolId })}
+                      onDelete={() => handleDeleteTool(categoryId, toolId)}
+                      isDeleting={deleteConfirm === `tool:${categoryId}:${toolId}`}
                       isEditing={
-                        editingTool?.categoryIndex === categoryIndex &&
-                        editingTool?.toolIndex === toolIndex
+                        editingTool?.categoryId === categoryId &&
+                        editingTool?.toolId === toolId
                       }
                       onSave={(updates) => {
                         updateTool(categoryIndex, toolIndex, updates);
@@ -653,10 +726,12 @@ export default function NavigationEditorPage() {
                       }}
                       onCancel={() => setEditingTool(null)}
                     />
-                  ))}
+                    );
+                  })}
                 </div>
               </EditorPanel>
-            ))}
+              );
+            })}
           </div>
         )}
       </EditorMain>

@@ -260,6 +260,37 @@ describe('setup API R2 flow', () => {
     );
   });
 
+  it('keeps the client identity configuration gate on first setup in production', async () => {
+    clearRuntimeEnv();
+    const dataRoot = createTempDataRoot();
+    vi.stubEnv('NODE_ENV', 'production');
+    delete process.env.SKIP_IP_VALIDATION;
+    process.env.EDITOR_RUNTIME_AUTH_SETUP_TOKEN = 'setup-token';
+
+    const response = await PUT(createSetupRequest({
+      ...createBaseSetupBody(dataRoot),
+      setupToken: 'setup-token',
+      r2SetupMode: 'disabled',
+      r2Settings: {
+        enabled: false,
+        accountId: '',
+        bucket: '',
+        accessKeyId: '',
+        secretAccessKey: '',
+        prefix: 'blog-navigation',
+        endpoint: '',
+        snapshotOnWrite: false,
+      },
+    }));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('TRUSTED_PROXY_IPS'),
+      })
+    );
+  });
+
   it('requires an authenticated editor session when auth is already configured before setup is complete', async () => {
     clearRuntimeEnv();
     const dataRoot = createTempDataRoot();

@@ -10,8 +10,32 @@ let startupTasksStarted = false;
 let scheduledRemoteBackupTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeInstanceLease: RuntimeInstanceLeaseHandle | null = null;
 let jobWorkerAbortController: AbortController | null = null;
+let shutdownSignalHandlersRegistered = false;
 
 export const SCHEDULED_REMOTE_BACKUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
+
+// A gracefully stopped process must release its runtime instance lease. Container
+// restarts hand the next instance a different hostname, so its dead-process check
+// cannot reclaim this lease before the stale window elapses.
+function releaseRuntimeStateOnSignal(): void {
+    stopServerStartupTasks();
+}
+
+function registerShutdownSignalHandlers(): void {
+    if (shutdownSignalHandlersRegistered) {
+        return;
+    }
+
+    shutdownSignalHandlersRegistered = true;
+    process.once('SIGINT', releaseRuntimeStateOnSignal);
+    process.once('SIGTERM', releaseRuntimeStateOnSignal);
+}
+
+function unregisterShutdownSignalHandlers(): void {
+    shutdownSignalHandlersRegistered = false;
+    process.off('SIGINT', releaseRuntimeStateOnSignal);
+    process.off('SIGTERM', releaseRuntimeStateOnSignal);
+}
 
 async function drainRemoteBackupQueue(): Promise<void> {
     const { drainPendingBackups } = await import('@/lib/editor-remote-backup');
@@ -123,6 +147,7 @@ export function startServerStartupTasks(): void {
 
     startupTasksStarted = true;
     runtimeInstanceLease = acquireRuntimeInstanceLease(getRuntimeDataRootPath());
+    registerShutdownSignalHandlers();
     verifyDataRootWritable();
     schedulePeriodicRemoteBackup();
 
@@ -143,6 +168,7 @@ export function startServerStartupTasks(): void {
 }
 
 export function stopServerStartupTasks(): void {
+    unregisterShutdownSignalHandlers();
     jobWorkerAbortController?.abort();
     jobWorkerAbortController = null;
 

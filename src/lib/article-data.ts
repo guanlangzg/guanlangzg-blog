@@ -1,7 +1,9 @@
-import type { Article } from '@/app/types/article';
-import { normalizeArticleKind, normalizeArticleStatus } from '@/lib/article-metadata';
+import type { Article, ArticleStatus } from '@/app/types/article';
+import { ARTICLE_STATUS_OPTIONS, normalizeArticleKind, normalizeArticleStatus } from '@/lib/article-metadata';
 import { normalizeSourceLinks, normalizeRevisionNotes } from '@/lib/source-links';
 import { normalizeOptionalString } from '@/lib/utils';
+
+const ARTICLE_STATUS_VALUES = new Set<string>(ARTICLE_STATUS_OPTIONS.map((option) => option.value));
 
 export class ArticleDataParseError extends Error {
     constructor(message: string) {
@@ -24,6 +26,16 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isOptionalString(value: unknown): value is string | undefined {
     return value === undefined || typeof value === 'string';
+}
+
+/** A status value that is present but unrecognized is an error, because the fallback is public. */
+function isOptionalArticleStatus(value: unknown): value is ArticleStatus | undefined {
+    return value === undefined
+        || (typeof value === 'string' && ARTICLE_STATUS_VALUES.has(value.trim()));
+}
+
+function isKnownArticleStatus(value: string): boolean {
+    return ARTICLE_STATUS_VALUES.has(value.trim());
 }
 
 function normalizeOptionalBoolean(value: unknown): boolean | undefined {
@@ -78,7 +90,7 @@ export function isArticle(value: unknown): value is Article {
         isFiniteNumber(value.updatedAt) &&
         isOptionalString(value.slug) &&
         isOptionalString(value.kind) &&
-        isOptionalString(value.status) &&
+        isOptionalArticleStatus(value.status) &&
         isOptionalString(value.category) &&
         isOptionalString(value.series) &&
         isOptionalString(value.updatedDate) &&
@@ -90,6 +102,10 @@ export function isArticle(value: unknown): value is Article {
 }
 
 function normalizeArticleOrThrow(value: unknown): Article {
+    if (isRecord(value) && typeof value.status === 'string' && !isKnownArticleStatus(value.status)) {
+        throw new ArticleDataParseError(`文章 status 无效：${value.status}`);
+    }
+
     if (!isArticle(value)) {
         throw new ArticleDataParseError(
             '文章必须包含 id、title、date、description、tags、content、createdAt、updatedAt，且类型正确。'
@@ -107,7 +123,8 @@ function normalizeArticleOrThrow(value: unknown): Article {
         updatedAt: value.updatedAt,
         slug: normalizeStoredSlug(value.slug) ?? createArticleSlug(value),
         kind: normalizeArticleKind(value.kind),
-        status: normalizeArticleStatus(value.status),
+        // Records saved before status existed stay published; only unrecognized values are rejected above.
+        status: normalizeArticleStatus(value.status?.trim()),
         featured: normalizeOptionalBoolean(value.featured) ?? false,
         sourceLinks: normalizeSourceLinks(value.sourceLinks),
         revisionNotes: normalizeRevisionNotes(value.revisionNotes),
@@ -126,6 +143,19 @@ function normalizeArticle(value: unknown): Article | null {
     }
 }
 
+/**
+ * Local recovery keeps every structurally valid record. An unrecognized status becomes
+ * `draft` instead of being dropped or published, so a typo never hides the article from
+ * its author and never exposes it to readers.
+ */
+function normalizeLocalArticle(value: unknown): Article | null {
+    if (isRecord(value) && typeof value.status === 'string' && !isKnownArticleStatus(value.status)) {
+        return normalizeArticle({ ...value, status: 'draft' });
+    }
+
+    return normalizeArticle(value);
+}
+
 export function filterArticlesData(value: unknown): Article[] {
     if (!Array.isArray(value)) {
         return [];
@@ -135,7 +165,7 @@ export function filterArticlesData(value: unknown): Article[] {
     const articles: Article[] = [];
 
     for (const item of value) {
-        const article = normalizeArticle(item);
+        const article = normalizeLocalArticle(item);
 
         if (!article?.slug || slugs.has(article.slug)) {
             continue;

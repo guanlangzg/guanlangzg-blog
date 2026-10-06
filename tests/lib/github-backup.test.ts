@@ -79,9 +79,11 @@ function createFakeGitHub(options: { privateRepository?: boolean } = {}) {
   const blobs = new Map<string, Uint8Array>();
   const requests: Array<{ method: string; endpoint: string }> = [];
   const trees = new Map<string, Map<string, string>>();
+  const treeEntries = new Map<string, Array<{ path: string; mode: string; type: string; sha: string }>>();
   const commits = new Map<string, { treeSha: string; parents: string[]; message: string }>();
   const refs = new Map<string, string>();
   const counts = { patch: 0, commits: 0, writes: 0, blobReads: 0 };
+  const blobReadShas: string[] = [];
   let advanceBeforePatch = false;
   let loseFirstPatchResponse = false;
   let forceValues: unknown[] = [];
@@ -126,13 +128,17 @@ function createFakeGitHub(options: { privateRepository?: boolean } = {}) {
       if (!tree) return json({ message: 'not found' }, 404);
       return json({
         sha,
-        tree: [...tree.entries()].map(([path, blobSha]) => ({ path, mode: '100644', type: 'blob', sha: blobSha })),
+        tree: [
+          ...[...tree.entries()].map(([path, blobSha]) => ({ path, mode: '100644', type: 'blob', sha: blobSha })),
+          ...(treeEntries.get(sha) ?? []),
+        ],
         truncated: false,
       });
     }
     if (endpoint.startsWith('/git/blobs/')) {
       counts.blobReads += 1;
       const sha = endpoint.slice('/git/blobs/'.length);
+      blobReadShas.push(sha);
       const bytes = blobs.get(sha);
       return bytes ? json({ sha, encoding: 'base64', content: Buffer.from(bytes).toString('base64') }) : json({ message: 'not found' }, 404);
     }
@@ -197,6 +203,10 @@ function createFakeGitHub(options: { privateRepository?: boolean } = {}) {
     counts,
     forceValues: () => forceValues,
     requests,
+    blobReadShas,
+    addTreeEntry: (treeSha: string, entry: { path: string; mode: string; type: string; sha: string }) => {
+      treeEntries.set(treeSha, [...(treeEntries.get(treeSha) ?? []), entry]);
+    },
     addFileToTree: (treeSha: string, filePath: string, bytes: Uint8Array) => {
       const sha = gitBlobSha(bytes);
       blobs.set(sha, new Uint8Array(bytes));
@@ -382,6 +392,20 @@ describe('private GitHub v1 backup', () => {
     expect(fake.counts.commits).toBe(1);
     expect(fake.refs.get('main')).toBe(proof.commitSha);
     expect(proof.snapshotId).toBe('snapshot-fixed-1');
+  });
+
+  it('preserves existing tree entries without requesting their tree SHA as a blob', async () => {
+    const fake = createFakeGitHub();
+    const firstClient = clientFor(fake);
+    const firstProof = await writeGitHubBackup(firstClient, backupInput());
+    const treeSha = fake.commits.get(firstProof.commitSha)!.treeSha;
+    const blobEntry = (fake.trees.get(treeSha) as Map<string, string>).entries().next().value as [string, string];
+    (fake.trees.get(treeSha) as Map<string, string>).delete(blobEntry[0]);
+    fake.addTreeEntry(treeSha, { path: 'archive', mode: '040000', type: 'tree', sha: 'nested-tree-sha' });
+
+    await expect(writeGitHubBackup(firstClient, backupInput({ snapshotId: 'snapshot-after-tree' }))).resolves.toBeDefined();
+
+    expect(fake.blobReadShas).not.toContain('nested-tree-sha');
   });
 
   it('preserves and re-verifies only unchanged repository blobs', async () => {

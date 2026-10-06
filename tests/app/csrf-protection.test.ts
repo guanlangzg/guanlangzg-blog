@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { ensureEditorWriteRequest } from '@/lib/editor-api-auth';
@@ -64,27 +65,26 @@ describe('CSRF Protection', () => {
       headers.set(EDITOR_CSRF_HEADER, options.csrfHeader);
     }
 
-    const cookies: Record<string, string> = {};
+    // Real Cookie header so NextRequest parses the cookies exactly like a
+    // browser request instead of a hand-rolled cookies stub.
+    const cookies: string[] = [];
+
     if (options.sessionCookie) {
-      cookies[EDITOR_SESSION_COOKIE] = options.sessionCookie;
-    }
-    if (options.csrfCookie) {
-      cookies[EDITOR_CSRF_COOKIE] = options.csrfCookie;
+      cookies.push(`${EDITOR_SESSION_COOKIE}=${options.sessionCookie}`);
     }
 
-    const request = new NextRequest(url, {
+    if (options.csrfCookie) {
+      cookies.push(`${EDITOR_CSRF_COOKIE}=${options.csrfCookie}`);
+    }
+
+    if (cookies.length > 0) {
+      headers.set('cookie', cookies.join('; '));
+    }
+
+    return new NextRequest(url, {
       method: options.method || 'POST',
       headers,
     });
-
-    // Mock cookies
-    Object.defineProperty(request, 'cookies', {
-      value: {
-        get: (name: string) => cookies[name] ? { value: cookies[name] } : undefined,
-      },
-    });
-
-    return request;
   }
 
   describe('ensureEditorWriteRequest', () => {
@@ -158,28 +158,30 @@ describe('CSRF Protection', () => {
       expect(response?.status).toBe(403);
     });
 
-    it('should accept requests with valid CSRF token and same origin', async () => {
+    it('accepts a real session cookie with a matching CSRF cookie and header from the same origin', async () => {
+      const csrfToken = randomBytes(32).toString('hex');
       const request = createMockRequest({
         origin: requestOrigin,
         sessionCookie: validSession,
-        csrfCookie: validCsrfToken,
-        csrfHeader: validCsrfToken,
+        csrfCookie: csrfToken,
+        csrfHeader: csrfToken,
       });
 
-      // 注意：这个测试假设 session 验证会通过
-      // 实际测试中可能需要 mock isValidRuntimeEditorSession
+      await expect(ensureEditorWriteRequest(request)).resolves.toBeNull();
+    });
+
+    it('rejects the same check when the session cookie is not the active session', async () => {
+      const csrfToken = randomBytes(32).toString('hex');
+      const request = createMockRequest({
+        origin: requestOrigin,
+        sessionCookie: 'stale-session-value',
+        csrfCookie: csrfToken,
+        csrfHeader: csrfToken,
+      });
+
       const response = await ensureEditorWriteRequest(request);
 
-      // 如果 session 验证失败，response 不为 null
-      // 如果 CSRF 验证通过但 session 无效，会返回 401
-      // 完整通过时返回 null
-      if (response) {
-        // Session 验证失败是预期的（因为 mock 环境）
-        expect([401, 503]).toContain(response.status);
-      } else {
-        // CSRF 验证通过
-        expect(response).toBeNull();
-      }
+      expect(response?.status).toBe(401);
     });
   });
 

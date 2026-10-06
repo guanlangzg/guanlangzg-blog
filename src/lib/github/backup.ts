@@ -404,7 +404,7 @@ export async function writeGitHubBackup(
     }
 
     for (const entry of head.tree.tree) {
-      if (verifiedFiles.has(entry.path) || encoded.files.has(entry.path)) continue;
+      if (entry.type !== 'blob' || verifiedFiles.has(entry.path) || encoded.files.has(entry.path)) continue;
       if (isSnapshotOwnedPath(entry.path)) {
         newTree.push({ path: entry.path, mode: '100644', type: 'blob', sha: null });
         continue;

@@ -61,19 +61,21 @@ export function readDraftSnapshot(): SiteSnapshot {
 
 /** First release has no live snapshot yet: the public site starts empty, not with drafts. */
 export function readBaseSnapshot(): SiteSnapshot {
-    const live = readLivePointer();
-    if (live) return readRelease(live.releaseId).snapshot;
-    return {
-        schemaVersion: 1,
-        siteId: readWorkflowFormat().siteId,
-        articles: [],
-        navigation: [],
-        settings: { ...DEFAULT_SITE_SETTINGS },
-        media: [],
-        redirects: [],
-        removedPaths: [],
-    };
+  const live = readLivePointer();
+  if (live) return readRelease(live.releaseId).snapshot;
+  return {
+    schemaVersion: 1,
+    siteId: readWorkflowFormat().siteId,
+    articles: [],
+    navigation: [],
+    settings: { ...DEFAULT_SITE_SETTINGS },
+    media: [],
+    redirects: [],
+    removedPaths: [],
+  };
 }
+
+
 
 function readWorkflowFormat(): { schemaVersion: 1; siteId: string } {
     const filePath = path.join(getRuntimeDataRootPath(), 'workflow', 'format.json');

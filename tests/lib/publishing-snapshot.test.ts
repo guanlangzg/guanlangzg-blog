@@ -65,6 +65,34 @@ function tool(title: string, url: string): Category {
   };
 }
 
+function outputPath(articleOrSlug: Article | string): string {
+  const slug = typeof articleOrSlug === 'string' ? articleOrSlug : articleOrSlug.slug ?? articleOrSlug.id;
+  return `/posts/${encodeURIComponent(slug)}/`;
+}
+
+/**
+ * One sealed release writes one file per public path: an article page, a rename redirect
+ * or a removal notice. Publishing and withdrawing must never let two of them claim it.
+ */
+function expectDistinctOutputPaths(candidate: SiteSnapshot): void {
+  const postPaths = new Set(candidate.articles.map(outputPath));
+  const redirectSources = candidate.redirects.map((redirect) => redirect.from);
+
+  for (const route of [...redirectSources, ...candidate.removedPaths]) {
+    expect(postPaths.has(route), `${route} is claimed by both a live article and a stale record`).toBe(false);
+  }
+  for (const source of redirectSources) {
+    expect(candidate.removedPaths, `${source} is claimed by both a redirect and a removal record`).not.toContain(source);
+  }
+  for (const redirect of candidate.redirects) {
+    const target = new URL(redirect.to, 'https://guanlangzg.github.io').pathname;
+    expect(
+      postPaths.has(target) || redirectSources.includes(target),
+      `${redirect.from} redirects to missing content: ${target}`,
+    ).toBe(true);
+  }
+}
+
 describe('explicit publication scope', () => {
   it('publishes A while keeping live B and never serializes B draft text', () => {
     const base = snapshot({ articles: [article('a', 'A old'), article('b', 'B live')] });
@@ -94,6 +122,95 @@ describe('explicit publication scope', () => {
     expect(candidate.articles.map((item) => item.id)).toEqual(['b']);
     expect(candidate.removedPaths).toContain('/posts/a/');
     expect(draft).toEqual(draftBefore);
+  });
+
+  it('removes a withdrawn path when publishing the article again', () => {
+    const base = snapshot({ removedPaths: ['/posts/a/'] });
+    const draft = snapshot({ articles: [article('a', 'republished')] });
+
+    const candidate = createCandidate(base, draft, { kind: 'article', articleId: 'a', action: 'publish' });
+
+    expect(candidate.removedPaths).not.toContain('/posts/a/');
+    expectDistinctOutputPaths(candidate);
+  });
+
+  it('withdraws a renamed article without redirecting into the removed page', () => {
+    const base = snapshot({ articles: [article('a', 'A live', 'old-slug')] });
+    const renamed = createCandidate(base, snapshot({ articles: [article('a', 'A live', 'new-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'publish',
+    });
+    expectDistinctOutputPaths(renamed);
+
+    const withdrawn = createCandidate(renamed, snapshot({ articles: [article('a', 'A live', 'new-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'withdraw',
+    });
+
+    expect(withdrawn.articles).toEqual([]);
+    expect(withdrawn.removedPaths).toEqual(['/posts/new-slug/', '/posts/old-slug/']);
+    expect(withdrawn.redirects).toEqual([]);
+    expectDistinctOutputPaths(withdrawn);
+  });
+
+  it('lets a republished article take back its path before the next rename', () => {
+    const base = snapshot({ articles: [article('a', 'A live', 'old-slug')] });
+    const withdrawn = createCandidate(base, snapshot({ articles: [article('a', 'A live', 'old-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'withdraw',
+    });
+    const republished = createCandidate(withdrawn, snapshot({ articles: [article('a', 'A live', 'old-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'publish',
+    });
+    expect(republished.removedPaths).toEqual([]);
+    expectDistinctOutputPaths(republished);
+
+    const renamed = createCandidate(republished, snapshot({ articles: [article('a', 'A live', 'new-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'publish',
+    });
+
+    expect(renamed.redirects).toEqual([{ from: '/posts/old-slug/', to: '/posts/new-slug/' }]);
+    expect(renamed.removedPaths).toEqual([]);
+    expectDistinctOutputPaths(renamed);
+  });
+
+  it('drops the stale redirect when an article is republished at a redirect source', () => {
+    const base = snapshot({ articles: [article('a', 'A live', 'old-slug')] });
+    const renamed = createCandidate(base, snapshot({ articles: [article('a', 'A live', 'new-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'publish',
+    });
+    const withdrawn = createCandidate(renamed, snapshot({ articles: [article('a', 'A live', 'new-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'withdraw',
+    });
+    const republished = createCandidate(withdrawn, snapshot({ articles: [article('a', 'A live', 'old-slug')] }), {
+      kind: 'article', articleId: 'a', action: 'publish',
+    });
+
+    expect(republished.articles.map((item) => item.slug)).toEqual(['old-slug']);
+    expect(republished.redirects).toEqual([]);
+    expect(republished.removedPaths).toEqual(['/posts/new-slug/']);
+    expectDistinctOutputPaths(republished);
+  });
+
+  it('keeps publish, rename and withdraw sequences free of shared output paths', () => {
+    const start = snapshot({ articles: [article('a', 'A live', 'x')] });
+    const operations = [
+      { kind: 'publish', slug: 'x' },
+      { kind: 'publish', slug: 'y' },
+      { kind: 'withdraw' },
+    ] as const;
+
+    function walk(state: SiteSnapshot, depth: number): void {
+      if (depth === 0) return;
+      const draftArticle = article('a', 'A live', state.articles.find((item) => item.id === 'a')?.slug ?? 'x');
+      for (const operation of operations) {
+        const next = operation.kind === 'withdraw'
+          ? createCandidate(state, snapshot({ articles: [draftArticle] }), { kind: 'article', articleId: 'a', action: 'withdraw' })
+          : createCandidate(state, snapshot({ articles: [article('a', 'A live', operation.slug)] }), { kind: 'article', articleId: 'a', action: 'publish' });
+        expectDistinctOutputPaths(next);
+        walk(next, depth - 1);
+      }
+    }
+
+    expectDistinctOutputPaths(start);
+    walk(start, 4);
   });
 
   it('replaces only navigation while retaining live articles and settings', () => {

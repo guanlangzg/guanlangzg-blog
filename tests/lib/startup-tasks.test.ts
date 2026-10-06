@@ -16,6 +16,7 @@ import {
   startServerStartupTasks,
 } from '@/lib/startup-tasks';
 import { createConfiguredGitHubBackupClient, createGitHubBackupJobHandler } from '@/lib/github/backup-service';
+import { getRuntimeInstanceLeasePath } from '@/lib/runtime-instance-lease';
 
 const { runJobWorkerLoopMock } = vi.hoisted(() => ({ runJobWorkerLoopMock: vi.fn() }));
 
@@ -97,9 +98,11 @@ describe('server startup tasks', () => {
     startServerStartupTasks();
     startServerStartupTasks();
 
+    // Real-clock budget: the worker start resolves a chain of dynamic imports, and
+    // vi.waitFor measures its timeout with real timers even under fake timers.
     await vi.waitFor(() => {
       expect(runJobWorkerLoopMock).toHaveBeenCalledOnce();
-    });
+    }, { timeout: 10_000 });
 
     const workerOptions = runJobWorkerLoopMock.mock.calls[0]?.[0] as {
       handlers: Record<string, unknown>;
@@ -117,6 +120,17 @@ describe('server startup tasks', () => {
     resetServerStartupTasksForTests();
 
     expect(workerOptions.signal.aborted).toBe(true);
+  });
+
+  it('releases the runtime instance lease when the process is asked to shut down', () => {
+    const leasePath = getRuntimeInstanceLeasePath(isolatedDataRoot);
+
+    startServerStartupTasks();
+    expect(fs.existsSync(leasePath)).toBe(true);
+
+    process.emit('SIGTERM', 'SIGTERM');
+
+    expect(fs.existsSync(leasePath)).toBe(false);
   });
 
   it('drains pending remote backup tasks on startup', async () => {

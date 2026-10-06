@@ -2,30 +2,37 @@
 // Runs the first-release acceptance loop against a real isolated static export:
 // fixture -> build -> leak/manifest assertions -> preview authorization -> mutation check.
 // Every check prints its own line so a failure points at one concrete behavior.
+// The fixture is a fresh os.tmpdir() directory this run creates with mkdtemp: it never reads,
+// writes or replaces the in-repo .tmp fixture kept by the standalone test:release:fixture CLI,
+// and it removes only the directory it created.
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { servePreviewArtifact } from '../../src/lib/public-build/preview.ts';
-import { createReleaseFixture, DRAFT_SECRET_MARKER } from './create-release-fixture.mjs';
+import { createReleaseFixture, DRAFT_SECRET_MARKER, RELEASE_ID } from './create-release-fixture.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const fixtureRoot = path.join(projectRoot, '.tmp', 'first-release-fixture');
-const outputRoot = path.join(fixtureRoot, 'out');
-const mutantOutputRoot = path.join(fixtureRoot, 'mutant-out');
+const buildScript = path.join(projectRoot, 'scripts', 'public-site', 'build.mjs');
 
 const results = [];
+
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
 
 function check(name, condition, detail = '') {
   results.push({ name, ok: Boolean(condition), detail });
   process.stdout.write(`${condition ? 'PASS' : 'FAIL'}  ${name}${!condition && detail ? ` — ${detail}` : ''}\n`);
 }
 
-function run(command, args, label) {
-  const result = spawnSync(command, args, {
+function run(args, label, extraEnv = {}) {
+  const result = spawnSync(process.execPath, args, {
     cwd: projectRoot,
     encoding: 'utf8',
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1', ...extraEnv },
     timeout: 600_000,
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -46,7 +53,7 @@ async function walk(directory, prefix = '') {
 
 // Recomputes the sealed manifest and returns the text of every public artifact.
 async function readArtifacts(outRoot) {
-  const releaseRoot = path.join(outRoot, 'first-release-candidate');
+  const releaseRoot = path.join(outRoot, RELEASE_ID);
   const manifest = JSON.parse(await fs.readFile(path.join(releaseRoot, 'artifacts.json'), 'utf8'));
   const artifactRoot = path.join(releaseRoot, 'app', 'out');
   const files = await walk(artifactRoot);
@@ -57,6 +64,31 @@ async function readArtifacts(outRoot) {
     }
   }
   return { releaseRoot, manifest, artifactRoot, files, text: textParts.join('\n') };
+}
+
+function readReleaseMarker(artifacts) {
+  return fs.readFile(path.join(artifacts.artifactRoot, '_release.json'), 'utf8').then((value) => JSON.parse(value));
+}
+
+function readIdentity(fixture) {
+  return fs.readFile(fixture.identityPath, 'utf8').then((value) => JSON.parse(value));
+}
+
+// The identity document is only meaningful if it describes the bytes that were actually frozen.
+async function verifyFixtureIdentity(fixture) {
+  const [candidateBytes, frozenBytes, identity] = await Promise.all([
+    fs.readFile(fixture.candidateSnapshotPath),
+    fs.readFile(fixture.frozenSnapshotPath),
+    readIdentity(fixture),
+  ]);
+  check('fixture: the candidate digest is the digest of the frozen candidate bytes',
+    identity.schemaVersion === 1 && identity.releaseId === RELEASE_ID
+    && identity.candidateDigest === sha256(candidateBytes)
+    && identity.candidateDigest === fixture.identity.candidateDigest,
+    `identity ${identity.candidateDigest} vs bytes ${sha256(candidateBytes)}`);
+  check('fixture: the snapshot digest is the digest of the frozen snapshot bytes',
+    identity.snapshotDigest === sha256(frozenBytes) && identity.snapshotDigest === fixture.identity.snapshotDigest,
+    `identity ${identity.snapshotDigest} vs bytes ${sha256(frozenBytes)}`);
 }
 
 async function verifyLeakage(artifacts, label) {
@@ -81,7 +113,7 @@ async function verifyLeakage(artifacts, label) {
     routeDirectories.slice(0, 5).join(', '));
 }
 
-async function verifyManifest(artifacts, label) {
+async function verifyManifest(artifacts, label, identity) {
   const { releaseRoot, manifest, artifactRoot } = artifacts;
   const onDisk = await walk(artifactRoot);
   const manifestPaths = manifest.files.map((entry) => entry.path.startsWith('app/out/')
@@ -93,16 +125,19 @@ async function verifyManifest(artifacts, label) {
   const mismatched = [];
   for (const entry of manifest.files) {
     const bytes = await fs.readFile(path.join(releaseRoot, ...entry.path.split('/')));
-    const digest = await import('node:crypto').then(({ createHash }) =>
-      createHash('sha256').update(bytes).digest('hex'));
-    if (bytes.byteLength !== entry.size || digest !== entry.sha256) mismatched.push(entry.path);
+    if (bytes.byteLength !== entry.size || sha256(bytes) !== entry.sha256) mismatched.push(entry.path);
   }
   check(`${label}: manifest sizes and hashes match the sealed bytes`, mismatched.length === 0, mismatched.join(', '));
 
-  const marker = JSON.parse(await fs.readFile(path.join(artifactRoot, '_release.json'), 'utf8'));
+  const marker = await readReleaseMarker(artifacts);
   const markerRecorded = manifest.files.some((entry) => entry.path.endsWith('_release.json'));
   check(`${label}: release marker is recorded but excluded from the digest`,
     markerRecorded && marker.artifactDigest === manifest.artifactDigest && marker.releaseId === manifest.releaseId);
+
+  check(`${label}: the sealed release carries the frozen candidate identity`,
+    marker.candidateDigest === identity.candidateDigest && marker.snapshotDigest === identity.snapshotDigest
+    && manifest.candidateDigest === identity.candidateDigest,
+    `marker ${marker.candidateDigest} vs identity ${identity.candidateDigest}`);
 }
 
 async function verifySearchAndFeeds(artifacts, label) {
@@ -120,6 +155,17 @@ async function verifySearchAndFeeds(artifacts, label) {
     robots.includes('https://guanlangzg.github.io/sitemap.xml'));
   check(`${label}: legacy path renders the removal notice`,
     (await fs.readFile(path.join(artifactRoot, 'blog', 'legacy-post', 'index.html'), 'utf8')).includes('内容已移除'));
+  check(`${label}: unreferenced managed media is not exported`,
+    !artifacts.files.includes(`_site/${RELEASE_ID}/media/unreferenced.png`));
+
+  // The static 404 document is the shared removal view; Next.js would otherwise fall back to
+  // its built-in "This page could not be found." page for every unknown GitHub Pages path.
+  const notFound = await fs.readFile(path.join(artifactRoot, '404.html'), 'utf8').catch(() => null);
+  check(`${label}: 404.html is the shared removal page rather than the Next.js default`,
+    notFound !== null && notFound.includes('内容已移除')
+    && notFound.includes('href="/"') && notFound.includes('href="/search/"')
+    && !notFound.includes('This page could not be found'),
+    notFound === null ? '404.html is missing from the sealed release' : '404.html does not match the shared removal view');
 }
 
 async function verifyPreviewAuthorization(artifacts, label) {
@@ -140,16 +186,16 @@ async function verifyPreviewAuthorization(artifacts, label) {
     : null;
 
   const base = {
-    requestedReleaseId: 'first-release-candidate',
-    expectedReleaseId: 'first-release-candidate',
-    activeReleaseId: 'first-release-candidate',
-    previewRelease: 'first-release-candidate',
+    requestedReleaseId: RELEASE_ID,
+    expectedReleaseId: RELEASE_ID,
+    activeReleaseId: RELEASE_ID,
+    previewRelease: RELEASE_ID,
     releaseRoot,
   };
 
   const paths = [
     relativeHtml,
-    'first-release-candidate/search-index.json',
+    `${RELEASE_ID}/search-index.json`,
     'posts/%E4%B8%AD%E6%96%87%E5%8D%95%E6%AE%B5%E6%96%87%E7%AB%A0/index.txt',
     ...(relativeScript ? [relativeScript] : []),
   ];
@@ -187,53 +233,92 @@ async function verifyPreviewAuthorization(artifacts, label) {
     && authorized.headers.get('x-robots-tag') === 'noindex, nofollow');
 }
 
-// Mutation check: if the build were to read all drafts, this build MUST leak and the
-// leak assertion MUST fail. Running it on a temp copy proves the check is not vacuous.
-async function verifyMutationDetectsLeak(mutantSnapshotPath) {
-  const mutantOut = mutantOutputRoot;
-  await fs.rm(mutantOut, { recursive: true, force: true });
-  const built = run(process.execPath, [
-    path.join(projectRoot, 'scripts', 'public-site', 'build.mjs'),
+// Mutation check: if the build were to read all drafts, this build MUST leak and the leak
+// assertion MUST fail. Running it on a temp copy proves the check is not vacuous.
+async function verifyMutationDetectsLeak(fixture, mutantOutputRoot) {
+  const [candidate, frozen, draft] = await Promise.all([
+    fs.readFile(fixture.candidateSnapshotPath, 'utf8').then((value) => JSON.parse(value)),
+    fs.readFile(fixture.frozenSnapshotPath, 'utf8').then((value) => JSON.parse(value)),
+    fs.readFile(fixture.draftPath, 'utf8').then((value) => JSON.parse(value)),
+  ]);
+  // A legal public snapshot (draft A merged in) plus its own identity document. The mutant
+  // snapshot sits next to the fixture identity on purpose: only the explicit --identity
+  // argument can make this build use the mutant digests instead of the frozen ones.
+  const mutantCandidateBytes = Buffer.from(JSON.stringify({ ...candidate, articles: [...candidate.articles, draft.article] }));
+  const mutantSnapshotBytes = Buffer.from(JSON.stringify({ ...frozen, posts: [...frozen.posts, draft.article] }));
+  const mutantCandidatePath = path.join(fixture.fixtureRoot, 'mutant-candidate.json');
+  const mutantSnapshotPath = path.join(fixture.fixtureRoot, 'mutant-snapshot.json');
+  const mutantIdentityPath = path.join(fixture.fixtureRoot, 'mutant-identity.json');
+  const mutantIdentity = {
+    schemaVersion: 1,
+    releaseId: RELEASE_ID,
+    candidateDigest: sha256(mutantCandidateBytes),
+    snapshotDigest: sha256(mutantSnapshotBytes),
+  };
+  await fs.writeFile(mutantCandidatePath, mutantCandidateBytes);
+  await fs.writeFile(mutantSnapshotPath, mutantSnapshotBytes);
+  await fs.writeFile(mutantIdentityPath, JSON.stringify(mutantIdentity));
+  check('mutation: the mutant identity describes the mutant snapshot bytes',
+    mutantIdentity.candidateDigest !== fixture.identity.candidateDigest
+    && mutantIdentity.candidateDigest === sha256(await fs.readFile(mutantCandidatePath))
+    && mutantIdentity.snapshotDigest === sha256(await fs.readFile(mutantSnapshotPath)),
+    `mutant candidate ${mutantIdentity.candidateDigest}`);
+
+  const built = run([
+    buildScript,
     '--snapshot', mutantSnapshotPath,
-    '--out', mutantOut,
-  ], 'mutant build');
+    '--identity', mutantIdentityPath,
+    '--candidate-digest', mutantIdentity.candidateDigest,
+    '--snapshot-digest', mutantIdentity.snapshotDigest,
+    '--out', mutantOutputRoot,
+  ], 'mutant build', { BLOG_DATA_ROOT: fixture.blockedDataRoot });
   if (built.status !== 0) {
     check('mutation: leaking candidate fails the leak assertion', false, 'mutant build did not run');
     return;
   }
-  const artifacts = await readArtifacts(mutantOut);
-  const leaked = artifacts.text.includes(DRAFT_SECRET_MARKER);
-  check('mutation: leaking candidate fails the leak assertion', leaked,
+  const artifacts = await readArtifacts(mutantOutputRoot);
+  check('mutation: leaking candidate fails the leak assertion', artifacts.text.includes(DRAFT_SECRET_MARKER),
     'the leak check would not have caught a build that read drafts');
-  await fs.rm(mutantOut, { recursive: true, force: true });
+  const marker = await readReleaseMarker(artifacts);
+  check('mutation: the mutant release is sealed under its own candidate identity',
+    mutantIdentity.candidateDigest !== fixture.identity.candidateDigest
+    && marker.candidateDigest === mutantIdentity.candidateDigest
+    && marker.snapshotDigest === mutantIdentity.snapshotDigest,
+    `marker ${marker.candidateDigest} vs mutant ${mutantIdentity.candidateDigest}`);
 }
 
-async function main() {
-  await createReleaseFixture();
+async function runAcceptance(fixtureRoot) {
+  const fixture = await createReleaseFixture({ root: fixtureRoot });
+  await verifyFixtureIdentity(fixture);
 
-  const build = run(process.execPath, [
-    path.join(projectRoot, 'scripts', 'public-site', 'build.mjs'),
-    '--snapshot', path.join(fixtureRoot, 'candidate.json'),
+  const outputRoot = path.join(fixtureRoot, 'out');
+  const build = run([
+    buildScript,
+    '--snapshot', fixture.frozenSnapshotPath,
+    '--identity', fixture.identityPath,
+    '--candidate-digest', fixture.identity.candidateDigest,
+    '--snapshot-digest', fixture.identity.snapshotDigest,
     '--out', outputRoot,
-  ], 'public build');
+  ], 'public build', { BLOG_DATA_ROOT: fixture.blockedDataRoot });
   check('isolated public build succeeds', build.status === 0, `exit ${build.status}`);
   if (build.status !== 0) throw new Error('Public build failed; stopping before artifact assertions.');
 
   const artifacts = await readArtifacts(outputRoot);
   await verifyLeakage(artifacts, 'release');
-  await verifyManifest(artifacts, 'release');
+  await verifyManifest(artifacts, 'release', fixture.identity);
   await verifySearchAndFeeds(artifacts, 'release');
   await verifyPreviewAuthorization(artifacts, 'release');
 
-  // Mutation: build the same snapshot with draft A merged into the public posts.
-  const candidate = JSON.parse(await fs.readFile(path.join(fixtureRoot, 'candidate.json'), 'utf8'));
-  const draft = JSON.parse(await fs.readFile(path.join(fixtureRoot, 'draft-a.json'), 'utf8'));
-  const mutantSnapshotPath = path.join(fixtureRoot, 'candidate-with-draft.json');
-  await fs.writeFile(mutantSnapshotPath, `${JSON.stringify({
-    ...candidate,
-    posts: [...candidate.posts, draft.article],
-  }, null, 2)}\n`);
-  await verifyMutationDetectsLeak(mutantSnapshotPath);
+  await verifyMutationDetectsLeak(fixture, path.join(fixtureRoot, 'mutant-out'));
+}
+
+async function main() {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guanlan-first-release-'));
+  try {
+    await runAcceptance(fixtureRoot);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 
   const failed = results.filter((entry) => !entry.ok);
   process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed.\n`);

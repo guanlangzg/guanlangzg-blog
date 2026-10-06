@@ -22,18 +22,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+const OPENING_FRONTMATTER_FENCE = /^---\r?\n/;
+const CLOSING_FRONTMATTER_FENCE = /^---[ \t]*(?:\r?\n|$)/m;
+
+/**
+ * Trailing newline that precedes the closing fence is not part of the block, so the match
+ * offset doubles as the frontmatter length used by the import size limit.
+ */
+function findFrontmatterClose(remaining: string): { index: number; length: number } | null {
+    const match = CLOSING_FRONTMATTER_FENCE.exec(remaining);
+
+    return match ? { index: match.index, length: match[0].length } : null;
+}
+
 function getFrontmatterBlockLength(markdown: string): number | null {
-    const openMatch = /^---\r?\n/.exec(markdown);
+    const openMatch = OPENING_FRONTMATTER_FENCE.exec(markdown);
 
     if (!openMatch) {
         return null;
     }
 
-    const frontmatterStart = openMatch[0].length;
-    const remaining = markdown.slice(frontmatterStart);
-    const closeMatch = /\r?\n---(?:\r?\n|$)/.exec(remaining);
+    const closeMatch = findFrontmatterClose(markdown.slice(openMatch[0].length));
 
-    return closeMatch ? closeMatch.index : remaining.length;
+    return closeMatch ? closeMatch.index : null;
 }
 
 function assertMarkdownWithinImportLimit(markdown: string): void {
@@ -129,7 +140,7 @@ function createOrderedFrontmatter(article: Frontmatter): Record<string, unknown>
 }
 
 export function parseRawMarkdownFrontmatter(markdown: string): ParsedRawFrontmatterResult {
-    const openMatch = /^---\r?\n/.exec(markdown);
+    const openMatch = OPENING_FRONTMATTER_FENCE.exec(markdown);
 
     if (!openMatch) {
         return {
@@ -139,15 +150,30 @@ export function parseRawMarkdownFrontmatter(markdown: string): ParsedRawFrontmat
         };
     }
 
-    const frontmatterStart = openMatch[0].length;
-    const remaining = markdown.slice(frontmatterStart);
-    const closeMatch = /\r?\n---(?:\r?\n|$)/.exec(remaining);
-    const frontmatterSource = closeMatch
-        ? remaining.slice(0, closeMatch.index)
-        : remaining;
-    const content = closeMatch
-        ? remaining.slice(closeMatch.index + closeMatch[0].length)
-        : '';
+    const remaining = markdown.slice(openMatch[0].length);
+    const closeMatch = findFrontmatterClose(remaining);
+
+    // Without a closing fence the leading "---" is a thematic break, not a frontmatter block.
+    // Swallowing everything after it would delete the first paragraphs of the document.
+    if (!closeMatch) {
+        return {
+            content: markdown,
+            data: {},
+            hasFrontmatter: false,
+        };
+    }
+
+    const frontmatterSource = remaining.slice(0, closeMatch.index);
+    const content = remaining.slice(closeMatch.index + closeMatch.length);
+
+    if (!frontmatterSource.trim()) {
+        return {
+            content,
+            data: {},
+            hasFrontmatter: true,
+        };
+    }
+
     const document = parseDocument(frontmatterSource, {
         prettyErrors: false,
     });
@@ -157,6 +183,16 @@ export function parseRawMarkdownFrontmatter(markdown: string): ParsedRawFrontmat
     }
 
     const parsed = document.toJSON();
+
+    // A closed block that is not a YAML mapping was body text between two thematic breaks;
+    // treating it as frontmatter would drop that text from the document.
+    if (parsed !== null && parsed !== undefined && !isRecord(parsed)) {
+        return {
+            content: markdown,
+            data: {},
+            hasFrontmatter: false,
+        };
+    }
 
     return {
         content,

@@ -9,6 +9,7 @@ import {
 } from '@/lib/api-json-body';
 import { ArticleDataParseError, parseArticleDataOrThrow, parseArticlesDataOrThrow } from '@/lib/article-data';
 import {
+    createEditorBackupStateInvalidResponse,
     createEditorDataFileInvalidResponse,
     createEditorDataLockTimeoutResponse,
     createEditorDataRootUnavailableResponse,
@@ -127,6 +128,12 @@ export async function PUT(request: NextRequest) {
             return unavailableResponse;
         }
 
+        const backupStateResponse = createEditorBackupStateInvalidResponse(error);
+
+        if (backupStateResponse) {
+            return backupStateResponse;
+        }
+
         const lockTimeoutResponse = createEditorDataLockTimeoutResponse(error);
 
         if (lockTimeoutResponse) {
@@ -215,6 +222,8 @@ export async function PATCH(request: NextRequest) {
     } catch (error) {
         const unavailableResponse = createEditorDataRootUnavailableResponse(error);
         if (unavailableResponse) return unavailableResponse;
+        const backupStateResponse = createEditorBackupStateInvalidResponse(error);
+        if (backupStateResponse) return backupStateResponse;
         const lockTimeoutResponse = createEditorDataLockTimeoutResponse(error);
         if (lockTimeoutResponse) return lockTimeoutResponse;
         const invalidResponse = createEditorDataFileInvalidResponse(error);

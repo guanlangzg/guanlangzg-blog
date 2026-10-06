@@ -54,10 +54,30 @@ describe('VPS access policy', () => {
     }
   });
 
-  it('still blocks media and other unlisted resources as resources', () => {
-    for (const pathname of ['/media/files/2026/01/abc.png', '/llms.txt', '/search-index.json']) {
+  it('allows only validated public media URLs and keeps other unlisted resources blocked', () => {
+    expect(classify(`/media/files/2026/01/${'a'.repeat(64)}.png`)).toEqual({ kind: 'allow' });
+    for (const pathname of ['/media/files/2026/01/not-a-digest.png', '/llms.txt', '/search-index.json']) {
       expect(classify(pathname), pathname).toEqual({ kind: 'blocked', target: 'resource' });
     }
+  });
+
+  it('binds a preview media request to the sealed media of the named release', () => {
+    const mediaPath = `/media/files/2026/01/${'a'.repeat(64)}.png`;
+
+    expect(classify(mediaPath, { previewRelease: 'rel-1' })).toEqual({
+      kind: 'preview',
+      releaseId: 'rel-1',
+      artifactPath: `_site/rel-1/media/files/2026/01/${'a'.repeat(64)}.png`,
+    });
+  });
+
+  it('refuses a preview media request whose release id is malformed', () => {
+    const mediaPath = `/media/files/2026/01/${'a'.repeat(64)}.png`;
+
+    expect(classify(mediaPath, { previewRelease: '../secret' })).toEqual({
+      kind: 'blocked',
+      target: 'resource',
+    });
   });
 
   it('serves RSC and prefetch reader requests anonymously so client navigation works', () => {

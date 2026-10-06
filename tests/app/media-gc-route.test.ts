@@ -5,6 +5,10 @@ import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { POST } from '@/app/api/data/media/gc/route';
 import { storeEditorMediaFile } from '@/lib/editor-media-storage';
+import { DEFAULT_SITE_SETTINGS } from '@/lib/site-settings';
+import { computeCandidateDigest } from '@/lib/publishing/snapshot';
+import { writeLivePointer, writeRelease } from '@/lib/publishing/store';
+import type { SiteSnapshot } from '@/lib/publishing/types';
 import {
   cleanupTempDirectories,
   createAuthedEditorRequest,
@@ -21,6 +25,7 @@ vi.mock('@/lib/r2-backup-storage', () => ({
 }));
 
 const ORIGINAL_ENV = {
+  BLOG_NAVIGATION_DOCKER: process.env.BLOG_NAVIGATION_DOCKER,
   BLOG_DATA_ROOT: process.env.BLOG_DATA_ROOT,
   EDITOR_ACCESS_TOKEN: process.env.EDITOR_ACCESS_TOKEN,
 };
@@ -44,6 +49,32 @@ function hashOf(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+function writeLiveRelease(assetPath: string): void {
+  const releaseId = 'live-media-release';
+  const snapshot: SiteSnapshot = {
+    schemaVersion: 1, siteId: 'site-media',
+    articles: [{
+      id: 'live-article', slug: 'live-article', title: 'Live article', date: '2026-10-05',
+      description: 'Published media test', tags: [], content: `![live](/media/${assetPath})`, createdAt: 1, updatedAt: 1,
+    }],
+    navigation: [], settings: { ...DEFAULT_SITE_SETTINGS },
+    media: [{ originalPath: assetPath, publicPath: `/media/${assetPath}`, sha256: hashOf(PNG_BYTES), size: PNG_BYTES.byteLength, mimeType: 'image/png' }],
+    redirects: [], removedPaths: [],
+  };
+  const candidateDigest = computeCandidateDigest(snapshot);
+  const now = '2026-10-05T00:00:00.000Z';
+  writeRelease({
+    schemaVersion: 1, id: releaseId, scope: { kind: 'bootstrap', articleIds: [] }, baseLiveReleaseId: null,
+    selectedRevision: 'b'.repeat(64), candidateDigest, artifactDigest: 'a'.repeat(64), status: 'live', backupProof: null,
+    publicCommitSha: 'c'.repeat(40), workflowRunId: 1, workflowRunAttempt: 1, retryFromAttempt: null,
+    error: null, createdAt: now, updatedAt: now,
+  }, snapshot);
+  writeLivePointer({
+    schemaVersion: 1, releaseId, candidateDigest, artifactDigest: 'a'.repeat(64), publicCommitSha: 'c'.repeat(40),
+    workflowRunId: 1, workflowRunAttempt: 1, verifiedAt: now,
+  });
+}
+
 afterEach(() => {
   vi.clearAllMocks();
   restoreEnv(ORIGINAL_ENV);
@@ -62,8 +93,28 @@ describe('media GC API', () => {
     expect(response.status).toBe(401);
   });
 
+  it('protects media referenced only by the live release from orphan collection', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const dataRoot = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = dataRoot;
+    const assetPath = `files/2026/06/${hashOf(PNG_BYTES)}.png`;
+    const livePath = path.join(dataRoot, 'media', assetPath);
+    fs.mkdirSync(path.dirname(livePath), { recursive: true });
+    fs.writeFileSync(livePath, PNG_BYTES);
+    writeLiveRelease(assetPath);
+
+    const response = await POST(await createAuthedEditorRequest('http://localhost/api/data/media/gc', { method: 'POST' }));
+    const payload = await response.json();
+
+    expect(response.status, JSON.stringify(payload)).toBe(200);
+    expect(payload).toMatchObject({ deleted: 0, freedBytes: 0 });
+    expect(fs.existsSync(livePath)).toBe(true);
+  });
+
   it('deletes orphan media files and keeps referenced ones', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    delete process.env.BLOG_NAVIGATION_DOCKER;
     const dataRoot = createTempDataRoot();
     process.env.BLOG_DATA_ROOT = dataRoot;
 
@@ -98,6 +149,7 @@ describe('media GC API', () => {
 
   it('does not delete non-managed files inside the media directory', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    delete process.env.BLOG_NAVIGATION_DOCKER;
     const dataRoot = createTempDataRoot();
     process.env.BLOG_DATA_ROOT = dataRoot;
 
@@ -123,6 +175,7 @@ describe('media GC API', () => {
 
   it('reports no deletions when there are no orphan files', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    delete process.env.BLOG_NAVIGATION_DOCKER;
     const dataRoot = createTempDataRoot();
     process.env.BLOG_DATA_ROOT = dataRoot;
 

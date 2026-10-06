@@ -169,7 +169,7 @@ export function createPublishingService(options: PublishingServiceOptions) {
           status: 'failed',
           error: {
             code: 'PUBLIC_BUILD_FAILED',
-            message: error.replace(/[\\r\\n]+/g, ' ').slice(0, 500),
+            message: error.replace(/[\r\n]+/g, ' ').slice(0, 500),
             retryable: true,
           },
         }, now());

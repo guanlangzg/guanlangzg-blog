@@ -31,11 +31,24 @@ function rewriteManagedMarkdown(content: string, media: PublicReleaseMedia[], re
   return output;
 }
 
+const SITE_ORIGIN = 'https://guanlangzg.github.io';
+
+/**
+ * Managed media is referenced as `/media/<path>`, but hand-written Markdown also uses the
+ * `./media/...`, `media/...` and site-origin absolute spellings of the same site-local file.
+ * They are all resolved to the one managed path before it is matched against the mapping, so
+ * a reference the editor rewrites is not left pointing at a path the artifact never exports.
+ */
+function assetPath(target: string): string {
+  const local = target.startsWith(SITE_ORIGIN) ? target.slice(SITE_ORIGIN.length) : target;
+  return local.startsWith('/') ? local : `/${local.replace(/^\.\//, '')}`;
+}
+
 function replaceMarkdownImages(content: string, mappings: Array<{ source: string; target: string }>): string {
   return content.replace(/(!?\[[^\]]*\]\()([^\s)]+)([^)]*\))/g, (full, prefix: string, rawTarget: string, suffix: string) => {
     const parsed = /^([^?#]*)([?#].*)?$/.exec(rawTarget);
     if (!parsed) return full;
-    const mapping = mappings.find((item) => item.source === parsed[1]);
+    const mapping = mappings.find((item) => item.source === assetPath(parsed[1]));
     return mapping ? `${prefix}${mapping.target}${parsed[2] ?? ''}${suffix}` : full;
   });
 }

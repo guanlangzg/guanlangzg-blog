@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { readNavigationFromDiskAsync } from '@/lib/editor-data-storage';
+import { getPublicLiveSnapshot, isLiveReaderRuntime } from '@/lib/live-public-reader';
 import { NavigationDirectory } from './NavigationDirectory';
 import { createCanonicalUrl, createOgImagePath } from '@/lib/site-url';
 
@@ -32,7 +33,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 async function getNavigationData() {
-    return readNavigationFromDiskAsync();
+    return isLiveReaderRuntime() ? getPublicLiveSnapshot().navigation : readNavigationFromDiskAsync();
 }
 
 export default async function NavigationPage() {

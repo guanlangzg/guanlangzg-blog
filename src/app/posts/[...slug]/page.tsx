@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { getPostBySlugArrayAsync, getRelatedPostsAsync } from '@/lib/markdown';
+import { getLivePostFromSnapshot, getLivePostsFromSnapshot, getPostBySlugArrayAsync, getRelatedPostsAsync, getRelatedPostsFromList } from '@/lib/markdown';
 import { MarkdownContent } from '@/app/components/markdown';
 import { JsonLd, PageHero, PostCard, ReadingProgress, TableOfContents } from '@/app/components/ui';
 import { notFound } from 'next/navigation';
@@ -8,6 +8,7 @@ import { ArrowLeft, CalendarDays, Clock3, History, LinkIcon, Tag } from 'lucide-
 import { getArticleKindLabel, getArticleStatusLabel } from '@/lib/article-metadata';
 import { getMarkdownHeadings } from '@/lib/article-quality';
 import { readSiteSettingsFromDiskAsync } from '@/lib/editor-data-storage';
+import { getPublicLiveSnapshot, isLiveReaderRuntime } from '@/lib/live-public-reader';
 import { createOgImagePath, getSiteUrl } from '@/lib/site-url';
 import { createArticleStructuredData, createBreadcrumbStructuredData } from '@/lib/structured-data';
 
@@ -65,16 +66,24 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function PostPage({ params }: { params: Promise<{ slug: string[] }> }) {
     const resolvedParams = await params;
-    const post = await getPostBySlugArrayAsync(resolvedParams.slug);
+    const live = isLiveReaderRuntime() ? getPublicLiveSnapshot() : null;
+    const post = live
+        ? getLivePostFromSnapshot(live, resolvedParams.slug)
+        : await getPostBySlugArrayAsync(resolvedParams.slug);
 
     if (!post) {
         notFound();
     }
 
     const headings = getMarkdownHeadings(post.content).filter((heading) => heading.level >= 2);
+    // The editorial lifecycle (draft/seedling/evergreen) is an editor signal. A sealed release is
+    // public by definition, so a reader must never see which internal stage the post came from.
+    const showEditorialStatus = live === null;
     const [relatedPosts, settings] = await Promise.all([
-        getRelatedPostsAsync(post.meta, 4),
-        readSiteSettingsFromDiskAsync(),
+        live
+            ? Promise.resolve(getRelatedPostsFromList(getLivePostsFromSnapshot(live), post.meta, 4))
+            : getRelatedPostsAsync(post.meta, 4),
+        live ? Promise.resolve(live.settings) : readSiteSettingsFromDiskAsync(),
     ]);
     const visibleTags = post.meta.tags.slice(0, 4);
     const hiddenTagCount = Math.max(post.meta.tags.length - visibleTags.length, 0);
@@ -120,7 +129,7 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
                                     <span className="rounded-token-badge border border-border bg-surface px-2 py-1 text-accent">
                                         {getArticleKindLabel(post.meta.kind)}
                                     </span>
-                                    {post.meta.status !== 'published' ? (
+                                    {showEditorialStatus && post.meta.status !== 'published' ? (
                                         <span className="rounded-token-badge border border-border bg-surface px-2 py-1">
                                             {getArticleStatusLabel(post.meta.status)}
                                         </span>

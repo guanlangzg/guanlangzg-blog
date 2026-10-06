@@ -25,6 +25,7 @@ import {
     type R2ChunkedUploadResult,
 } from '@/lib/r2-chunked-backup-storage';
 import { EditorDataRootUnavailableError } from '@/lib/editor-data-storage';
+import { describeErrorForLog } from '@/lib/jobs/error-log';
 
 export type RemoteBackupResult =
     | {
@@ -162,6 +163,21 @@ export async function queueCurrentBackupToRemote(options: {
     }
 }
 
+// Fire-and-forget drains must never surface as unhandled rejections: the process
+// keeps running, the queued tasks stay retryable, and the log carries a fixed
+// context instead of echoing raw error text that may embed remote details.
+function drainPendingBackupsInBackground(): void {
+    void drainPendingBackups().catch((error: unknown) => {
+        const reason = error instanceof BackupCoordinatorStateInvalidError
+            ? getQueueStateInvalidMessage(error)
+            : 'unexpected drain failure';
+        console.error(
+            '[editor-remote-backup] Failed to drain pending backups:',
+            `${reason} (${describeErrorForLog(error)})`
+        );
+    });
+}
+
 async function enqueueRemoteBackup(options: RemoteBackupOptions): Promise<void> {
     const snapshotReference = options.writeSnapshot
         ? createCurrentEditorManifestSnapshotReference()
@@ -174,7 +190,7 @@ async function enqueueRemoteBackup(options: RemoteBackupOptions): Promise<void> 
         snapshotManifest: snapshotReference?.manifest,
         snapshotManifestHash: snapshotReference?.manifestHash,
     });
-    void drainPendingBackups();
+    drainPendingBackupsInBackground();
 }
 
 async function executePendingBackupTask(task: BackupTask): Promise<boolean> {
@@ -232,7 +248,7 @@ export async function retryFailedRemoteBackups(): Promise<{ retried: number; bac
     const retried = await retryFailedBackupTasks();
 
     if (retried > 0) {
-        void drainPendingBackups();
+        drainPendingBackupsInBackground();
     }
 
     return {

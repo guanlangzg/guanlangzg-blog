@@ -69,6 +69,44 @@ describe('BackupsPage', () => {
     expect(container.querySelector('button')?.textContent).not.toContain('生成合并计划');
   });
 
+  it('shows the nested API error message when the remote backup history fails', async () => {
+    fetchMock.mockResolvedValueOnce(json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'GitHub 远端备份服务暂时不可用。',
+        retryable: true,
+        requestId: 'req-backup-list',
+      },
+    }, 500));
+
+    await act(async () => { root.render(<BackupsPage />); });
+    await flush();
+
+    expect(container.textContent).toContain('远端备份历史暂不可查询');
+    expect(container.textContent).toContain('GitHub 远端备份服务暂时不可用。');
+  });
+
+  it('shows the nested API error message when creating a backup fails', async () => {
+    fetchMock
+      .mockResolvedValueOnce(json({ status: 'available', items: [], nextCursor: null }))
+      .mockResolvedValueOnce(json({
+        error: {
+          code: 'GITHUB_NOT_READY',
+          message: 'GitHub 连接尚未就绪。',
+          retryable: false,
+          requestId: 'req-backup-create',
+        },
+      }, 503));
+
+    await act(async () => { root.render(<BackupsPage />); });
+    await flush();
+
+    await act(async () => { button('创建 GitHub 备份').click(); });
+    await flush();
+
+    expect(container.textContent).toContain('GitHub 连接尚未就绪。');
+  });
+
   it('requires a choice for every conflict and submits the plan base revision', async () => {
     fetchMock
       .mockResolvedValueOnce(json({ status: 'available', items: [{ commitSha: commit, committedAt: '2026-10-01T00:00:00Z', digest: 'sha256:digest', source: 'remote' }], nextCursor: null }))

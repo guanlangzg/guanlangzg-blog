@@ -48,12 +48,68 @@ function readLease(filePath: string): RuntimeInstanceLease | null {
     }
 }
 
+function readLeaseWithMtime(filePath: string): { lease: RuntimeInstanceLease; mtimeMs: number } | null {
+    const lease = readLease(filePath);
+
+    if (!lease) {
+        return null;
+    }
+
+    try {
+        return { lease, mtimeMs: fs.statSync(filePath).mtimeMs };
+    } catch {
+        return null;
+    }
+}
+
+function isProcessAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        // ESRCH means the process is gone; EPERM and unknown errors keep the lease reserved.
+        return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    }
+}
+
 function isLeaseStale(filePath: string): boolean {
     try {
         return Date.now() - fs.statSync(filePath).mtimeMs > LEASE_STALE_AFTER_MS;
     } catch {
         return true;
     }
+}
+
+// A heartbeat can never be refreshed once its process is gone, so a lease owned
+// by a dead process on this host is reclaimed immediately instead of after the
+// stale window. The lease is re-read right before removal so a lease recreated
+// by a live peer in between is never deleted. Foreign hosts keep the mtime rule
+// because their process liveness cannot be observed from here.
+function reclaimDeadLease(filePath: string): boolean {
+    const first = readLeaseWithMtime(filePath);
+
+    if (
+        !first ||
+        first.lease.hostname !== os.hostname() ||
+        !Number.isInteger(first.lease.pid) || first.lease.pid <= 0 ||
+        isProcessAlive(first.lease.pid)
+    ) {
+        return false;
+    }
+
+    const second = readLeaseWithMtime(filePath);
+
+    if (
+        !second ||
+        second.lease.token !== first.lease.token ||
+        second.lease.pid !== first.lease.pid ||
+        second.mtimeMs !== first.mtimeMs
+    ) {
+        return false;
+    }
+
+    fs.rmSync(filePath, { force: true });
+    return true;
 }
 
 function writeLease(fileDescriptor: number, lease: RuntimeInstanceLease): void {
@@ -76,12 +132,25 @@ export function acquireRuntimeInstanceLease(dataRoot: string): RuntimeInstanceLe
         try {
             fileDescriptor = fs.openSync(leasePath, 'wx', 0o600);
         } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || !isLeaseStale(leasePath)) {
+            if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+                throw error;
+            }
+
+            if (isLeaseStale(leasePath)) {
+                fs.rmSync(leasePath, { force: true });
+            } else if (!reclaimDeadLease(leasePath)) {
                 throw new RuntimeInstanceAlreadyRunningError(leasePath, readLease(leasePath));
             }
 
-            fs.rmSync(leasePath, { force: true });
-            fileDescriptor = fs.openSync(leasePath, 'wx', 0o600);
+            try {
+                fileDescriptor = fs.openSync(leasePath, 'wx', 0o600);
+            } catch (retryError) {
+                if ((retryError as NodeJS.ErrnoException).code === 'EEXIST') {
+                    throw new RuntimeInstanceAlreadyRunningError(leasePath, readLease(leasePath));
+                }
+
+                throw retryError;
+            }
         }
 
         writeLease(fileDescriptor, lease);

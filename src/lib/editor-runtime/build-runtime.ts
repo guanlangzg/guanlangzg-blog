@@ -41,9 +41,20 @@ function validJobInput(job: JobRecord): { releaseId: string; candidateDigest: st
   return { releaseId: input.releaseId, candidateDigest: input.candidateDigest };
 }
 
-function execPublicBuild(snapshotPath: string, outputPath: string): Promise<void> {
+function execPublicBuild(
+  input: { snapshotPath: string; identityPath: string; snapshotDigest: string },
+  outputPath: string,
+  candidateDigest: string,
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [buildScript, '--snapshot', snapshotPath, '--out', outputPath], {
+    const child = spawn(process.execPath, [
+      buildScript,
+      '--snapshot', input.snapshotPath,
+      '--identity', input.identityPath,
+      '--out', outputPath,
+      '--candidate-digest', candidateDigest,
+      '--snapshot-digest', input.snapshotDigest,
+    ], {
       cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
@@ -78,7 +89,18 @@ function execPublicBuild(snapshotPath: string, outputPath: string): Promise<void
   });
 }
 
-async function writeFrozenInput(release: ReleaseRecord, snapshot: SiteSnapshot, directory: string): Promise<string> {
+/**
+ * The public snapshot is a projection of the candidate, so its digest cannot be recomputed
+ * from a candidate digest. The identity document written next to the frozen bytes carries
+ * both digests into the build child, which re-verifies them against those bytes before it
+ * seals anything, and `sealBuildOutput` re-verifies the sealed digest against the release.
+ */
+async function writeFrozenInput(
+  release: ReleaseRecord,
+  snapshot: SiteSnapshot,
+  candidateDigest: string,
+  directory: string,
+): Promise<{ snapshotPath: string; identityPath: string; snapshotDigest: string }> {
   const mediaRoot = path.join(directory, 'media');
   await fs.mkdir(mediaRoot, { recursive: true });
   const publicSnapshot = fromReleaseSnapshot(release.id, snapshot);
@@ -98,8 +120,17 @@ async function writeFrozenInput(release: ReleaseRecord, snapshot: SiteSnapshot, 
     await fs.writeFile(target, bytes, { flag: 'wx' });
   }
   const input = path.join(directory, 'snapshot.json');
-  await fs.writeFile(input, JSON.stringify(publicSnapshot), { flag: 'wx' });
-  return input;
+  const serialized = JSON.stringify(publicSnapshot);
+  const snapshotDigest = createHash('sha256').update(serialized).digest('hex');
+  await fs.writeFile(input, serialized, { flag: 'wx' });
+  const identityPath = path.join(directory, 'candidate-identity.json');
+  await fs.writeFile(identityPath, JSON.stringify({
+    schemaVersion: 1,
+    releaseId: release.id,
+    candidateDigest,
+    snapshotDigest,
+  }), { flag: 'wx' });
+  return { snapshotPath: input, identityPath, snapshotDigest };
 }
 
 async function sealBuildOutput(releaseId: string, outputRoot: string, candidateDigest: string): Promise<string> {
@@ -125,8 +156,10 @@ async function sealBuildOutput(releaseId: string, outputRoot: string, candidateD
     return manifest.artifactDigest;
   }
 
-  const current = readRelease(releaseId);
-  if (current.release.candidateDigest !== candidateDigest || computeCandidateDigest(current.snapshot) !== candidateDigest) {
+  // The persisted release is the authority for the candidate digest: the sealed artifact may
+  // only be committed when the release still carries the digest this build was started for.
+  const stored = readRelease(releaseId);
+  if (stored.release.candidateDigest !== candidateDigest || computeCandidateDigest(stored.snapshot) !== candidateDigest) {
     throw new Error('Candidate changed while its public artifact was building.');
   }
 
@@ -182,8 +215,8 @@ export function createBuildJobHandler() {
     const outputDirectory = path.join(staging, 'output');
     await fs.mkdir(inputDirectory);
     try {
-      const snapshotPath = await writeFrozenInput(stored.release, stored.snapshot, inputDirectory);
-      await execPublicBuild(snapshotPath, outputDirectory);
+      const frozenInput = await writeFrozenInput(stored.release, stored.snapshot, candidateDigest, inputDirectory);
+      await execPublicBuild(frozenInput, outputDirectory, candidateDigest);
       const artifactDigest = await sealBuildOutput(releaseId, outputDirectory, candidateDigest);
       const current = readRelease(releaseId);
       const publishing = createEditorPublishingService();

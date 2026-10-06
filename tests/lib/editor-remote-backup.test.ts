@@ -153,6 +153,38 @@ function createDeferred<T = R2ChunkedUploadResult>() {
   };
 }
 
+// A drain lock held by a live process blocks the fire-and-forget drain until its
+// five second wait times out, which is the failure path under test.
+function holdDrainLock(dataRoot: string): string {
+  const drainLockPath = path.join(dataRoot, '.backup-pending-drain.lock');
+
+  fs.mkdirSync(drainLockPath, { recursive: true });
+  fs.writeFileSync(path.join(drainLockPath, 'owner.json'), JSON.stringify({
+    token: 'held-by-test',
+    pid: process.pid,
+    acquiredAt: new Date().toISOString(),
+  }, null, 2), 'utf8');
+  return drainLockPath;
+}
+
+function releaseDrainLock(drainLockPath: string): void {
+  fs.rmSync(drainLockPath, { recursive: true, force: true });
+}
+
+function collectUnhandledRejections() {
+  const reasons: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown): void => {
+    reasons.push(reason);
+  };
+
+  process.on('unhandledRejection', onUnhandledRejection);
+
+  return {
+    reasons,
+    stop: () => process.off('unhandledRejection', onUnhandledRejection),
+  };
+}
+
 function createChunkedUploadResult(snapshotId = 'snapshot-1'): R2ChunkedUploadResult {
   return {
     format: 'v2-chunked',
@@ -377,6 +409,143 @@ describe('remote backup sync', () => {
       reason: 'latest-write',
       writeSnapshot: false,
       writeLatest: undefined,
+    });
+  });
+
+  it('does not produce an unhandled rejection when a queued drain cannot start, and keeps the task retryable', async () => {
+    const dataRoot = process.env.BLOG_DATA_ROOT as string;
+
+    mockedGetR2BackupConfig.mockReturnValue({
+      bucket: 'blog-data',
+      endpoint: 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      accessKeyId: 'access-key',
+      secretAccessKey: 'secret-key',
+      prefix: 'blog-navigation',
+      snapshotOnWrite: false,
+    });
+    mockedGetR2BackupStatus.mockReturnValue(createConfiguredStatus());
+    mockedCreateCurrentEditorRemoteBackupPackage.mockResolvedValue(createRemoteBackupPackage('retryable'));
+    const drainLockPath = holdDrainLock(dataRoot);
+    const unhandled = collectUnhandledRejections();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      expect(await queueCurrentBackupToRemote({ reason: 'held-drain-write' })).toEqual(
+        expect.objectContaining({ queued: true })
+      );
+
+      await vi.waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          '[editor-remote-backup] Failed to drain pending backups:',
+          expect.stringContaining('Error')
+        );
+      }, { timeout: 20_000 });
+    } finally {
+      unhandled.stop();
+      consoleError.mockRestore();
+      releaseDrainLock(drainLockPath);
+    }
+
+    expect(unhandled.reasons).toEqual([]);
+    expect(consoleError.mock.calls.flat().join(' ')).not.toContain('Timed out while waiting for the pending backup drain lock');
+    expect(await getRemoteBackupQueueStatus()).toEqual({ pending: 1, failed: 0, failedTasks: [] });
+
+    await drainPendingBackups();
+
+    expect(await getRemoteBackupQueueStatus()).toEqual({ pending: 0, failed: 0, failedTasks: [] });
+    expect(mockedUploadChunkedBackupToR2).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
+  it('does not produce an unhandled rejection when a retry-triggered drain cannot start', async () => {
+    const dataRoot = process.env.BLOG_DATA_ROOT as string;
+
+    mockedGetR2BackupConfig.mockReturnValue({
+      bucket: 'blog-data',
+      endpoint: 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      accessKeyId: 'access-key',
+      secretAccessKey: 'secret-key',
+      prefix: 'blog-navigation',
+      snapshotOnWrite: false,
+    });
+    mockedGetR2BackupStatus.mockReturnValue(createConfiguredStatus());
+    mockedCreateCurrentEditorRemoteBackupPackage.mockResolvedValue(createRemoteBackupPackage('retried'));
+    fs.writeFileSync(getPendingBackupFilePath(dataRoot), JSON.stringify({
+      version: 2,
+      tasks: [
+        {
+          id: 'failed-before-retry',
+          reason: 'queued-write',
+          timestamp: '2026-06-19T00:00:00.000Z',
+          retries: 3,
+          attempts: 3,
+          status: 'failed',
+          writeSnapshot: false,
+          lastError: 'R2 upload failed.',
+          lastAttemptAt: '2026-06-19T00:10:00.000Z',
+        },
+      ],
+    }, null, 2), 'utf8');
+    const drainLockPath = holdDrainLock(dataRoot);
+    const unhandled = collectUnhandledRejections();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      expect(await retryFailedRemoteBackups()).toEqual(
+        expect.objectContaining({ retried: 1 })
+      );
+
+      await vi.waitFor(() => {
+        expect(consoleError).toHaveBeenCalledWith(
+          '[editor-remote-backup] Failed to drain pending backups:',
+          expect.stringContaining('Error')
+        );
+      }, { timeout: 20_000 });
+    } finally {
+      unhandled.stop();
+      consoleError.mockRestore();
+      releaseDrainLock(drainLockPath);
+    }
+
+    expect(unhandled.reasons).toEqual([]);
+    expect(await getRemoteBackupQueueStatus()).toEqual({ pending: 1, failed: 0, failedTasks: [] });
+
+    await drainPendingBackups();
+
+    expect(await getRemoteBackupQueueStatus()).toEqual({ pending: 0, failed: 0, failedTasks: [] });
+    expect(mockedUploadChunkedBackupToR2).toHaveBeenCalledTimes(1);
+  }, 30_000);
+
+  it('keeps raw remote diagnostics available to the authenticated editor queue status', async () => {
+    const sensitiveError = 'NoSuchBucket bucket=private-backups x-amz-request-id=ABC';
+
+    mockedGetR2BackupConfig.mockReturnValue({
+      bucket: 'blog-data',
+      endpoint: 'https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com',
+      accessKeyId: 'access-key',
+      secretAccessKey: 'secret-key',
+      prefix: 'blog-navigation',
+      snapshotOnWrite: false,
+    });
+    mockedGetR2BackupStatus.mockReturnValue(createConfiguredStatus());
+    mockedCreateCurrentEditorRemoteBackupPackage.mockResolvedValue(createRemoteBackupPackage('diagnostics'));
+    mockedUploadChunkedBackupToR2
+      .mockRejectedValueOnce(new Error(sensitiveError))
+      .mockRejectedValueOnce(new Error(sensitiveError))
+      .mockRejectedValueOnce(new Error(sensitiveError));
+
+    await queueCurrentBackupToRemote({ reason: 'diagnostics-write' });
+    await waitForRemoteBackupQueueIdleForTests();
+
+    expect(await getRemoteBackupQueueStatus()).toEqual({
+      pending: 0,
+      failed: 1,
+      failedTasks: [
+        expect.objectContaining({
+          reason: 'diagnostics-write',
+          attempts: 3,
+          lastError: sensitiveError,
+        }),
+      ],
     });
   });
 
