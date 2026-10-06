@@ -110,9 +110,15 @@ function createSandbox(owners: Record<string, { owner: string; mode: string }>):
   fs.mkdirSync(stubDirectory, { recursive: true });
   const libraryPath = path.join(stubDirectory, 'sim-lib.sh');
   fs.writeFileSync(libraryPath, simulationLibrary);
-  fs.writeFileSync(path.join(stubDirectory, 'su-exec'), suExecStub);
-  fs.writeFileSync(path.join(stubDirectory, 'chmod'), chmodStub);
-  fs.writeFileSync(path.join(stubDirectory, 'chown'), chownStub);
+  // On POSIX the shell walks PATH and skips entries it cannot execute, which would
+  // hand the call to the real chown/chmod/su-exec and fail on a host that has no
+  // `nextjs` user. Windows hosts do not enforce the exec bit, so the mode is set
+  // explicitly to keep the simulation portable.
+  for (const [name, stub] of [['su-exec', suExecStub], ['chmod', chmodStub], ['chown', chownStub]] as const) {
+    const stubPath = path.join(stubDirectory, name);
+    fs.writeFileSync(stubPath, stub);
+    fs.chmodSync(stubPath, 0o755);
+  }
   for (const [root, state] of Object.entries(owners)) {
     const rootDirectory = path.join(sandbox, root);
     fs.mkdirSync(rootDirectory, { recursive: true });
