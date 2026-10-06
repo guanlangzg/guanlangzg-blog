@@ -139,6 +139,20 @@ describe('publishing confirmation contracts', () => {
     expect(recovered.error).toBeNull();
   });
 
+  it('keeps the build failure message intact when collapsing line breaks', async () => {
+    setup();
+    const candidate = await previewReady();
+    tx.writeRelease({ ...tx.readRelease(candidate.release.id).release, status: 'building' }, candidate.snapshot);
+    const failed = await service.markPreviewFailed(
+      candidate.release.id,
+      'Error: cannot resolve module\n  at build (runner.js:12)\r\n  at main (runner.js:40)'
+    );
+
+    expect(failed.error?.message).toBe(
+      'Error: cannot resolve module   at build (runner.js:12)   at main (runner.js:40)'
+    );
+  });
+
   it('returns a conflict when another release already owns the publish slot', async () => {
     setup();
     const first = await previewReady();

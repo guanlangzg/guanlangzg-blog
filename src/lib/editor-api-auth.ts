@@ -20,6 +20,7 @@ import {
     EditorDataLockTimeoutError,
     EditorDataRootUnavailableError,
 } from '@/lib/editor-data-storage';
+import { BackupStateInvalidError } from '@/lib/jobs/watermark';
 import { getPublicRequestOrigin } from '@/lib/request-origin';
 
 export const EDITOR_AUTH_CONFIG_INVALID_MESSAGE = '编辑口令配置文件损坏，请修复或删除后重试。';
@@ -40,6 +41,26 @@ function createEditorCsrfInvalidResponse(): NextResponse {
     );
 }
 
+function createEditorCrossOriginLoginResponse(): NextResponse {
+    return NextResponse.json(
+        {
+            code: 'cross_origin_login',
+            message: '登录请求来源校验失败，请从编辑登录页重试。',
+        },
+        { status: 403 }
+    );
+}
+
+function createEditorUnsupportedContentTypeResponse(): NextResponse {
+    return NextResponse.json(
+        {
+            code: 'unsupported_content_type',
+            message: '登录请求必须使用 application/json。',
+        },
+        { status: 415 }
+    );
+}
+
 function isSameOriginEditorRequest(request: NextRequest): boolean {
     const origin = request.headers.get('origin');
 
@@ -48,6 +69,36 @@ function isSameOriginEditorRequest(request: NextRequest): boolean {
     }
 
     return origin === getPublicRequestOrigin(request);
+}
+
+const JSON_CONTENT_TYPE = 'application/json';
+
+function hasJsonEditorContentType(request: NextRequest): boolean {
+    const contentType = request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+
+    return contentType === JSON_CONTENT_TYPE;
+}
+
+// Login runs before any session or CSRF cookie exists, so it cannot use the
+// double-submit check of the editor write endpoints. Two request boundaries
+// replace it instead: an Origin naming another site is rejected outright
+// (browsers attach Origin to every cross-site POST, and the request origin is
+// never used here to lift a gate), and only application/json bodies are read,
+// which a cross-site form post cannot send without a CORS preflight. Requests
+// without an Origin header come from non-browser clients (deployment and smoke
+// scripts); they still have to pass the content-type check.
+export function ensureEditorLoginRequest(request: NextRequest): NextResponse | null {
+    const origin = request.headers.get('origin');
+
+    if (origin && !isSameOriginEditorRequest(request)) {
+        return createEditorCrossOriginLoginResponse();
+    }
+
+    if (!hasJsonEditorContentType(request)) {
+        return createEditorUnsupportedContentTypeResponse();
+    }
+
+    return null;
 }
 
 function isValidEditorCsrfToken(request: NextRequest): boolean {
@@ -152,6 +203,26 @@ export function createEditorDataRootUnavailableResponse(error: unknown): NextRes
         {
             code: 'runtime_data_root_unavailable',
             message: '运行时数据目录不可用，请检查服务器数据目录路径和写入权限。',
+        },
+        { status: 503 }
+    );
+}
+
+/**
+ * A damaged watermark or job file now refuses every content write so data cannot
+ * land without backup bookkeeping. That is an operator-visible server state, not
+ * an unexplained failure, so it answers 503 like `/api/ready` does for the same
+ * condition instead of masking it as a generic internal error.
+ */
+export function createEditorBackupStateInvalidResponse(error: unknown): NextResponse | null {
+    if (!(error instanceof BackupStateInvalidError)) {
+        return null;
+    }
+
+    return NextResponse.json(
+        {
+            code: 'backup_state_invalid',
+            message: '服务器备份记账文件损坏，已暂停内容写入；请先修复运行时状态文件。',
         },
         { status: 503 }
     );

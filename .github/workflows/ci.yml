@@ -3,11 +3,14 @@ name: ci
 on:
   push:
     branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
   workflow_dispatch:
 
+# Pull request runs stay read-only. Only the publish job asks for packages: write,
+# and that job never runs for a pull request.
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -33,10 +36,50 @@ jobs:
       - run: npm run deadcode
       - run: python -m unittest discover -s scripts/test -p "test_*.py"
 
-  image:
+  runner-image:
     needs: check
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      # The first-release acceptance drives the isolated public export from the host
+      # toolchain, so it needs the locked dependency tree before it can run.
+      - run: npm ci --no-audit
+      # Its fixture lives in the OS temp directory; node_modules stays out of the Docker
+      # context, so running it before the image build only fails faster.
+      - run: npm run test:release
+      - uses: docker/setup-buildx-action@v3
+      # Build the final runner stage and load it locally; nothing is pushed here.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          load: true
+          tags: guanlangzg-blog-runner:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Proves the shipped image itself builds and seals the public site with no
+      # network and as the non-root nextjs user. Exit code 2 means Docker was
+      # unavailable, which must never be read as a pass.
+      - run: node scripts/test/verify-builder-container.mjs
+        env:
+          RUNNER_IMAGE: guanlangzg-blog-runner:ci
+          RUNNER_SKIP_BUILD: "1"
+
+  publish-image:
+    # Pull requests never push. The confirmed release semantics of a push to main
+    # or dev are unchanged: same tags, same labels, now with version build args.
+    if: github.event_name != 'pull_request'
+    needs: runner-image
+    runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -58,5 +101,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_IMAGE_TAG=${{ steps.meta.outputs.version }}
+            APP_REVISION=${{ github.sha }}
+            APP_BUILD_TIME=${{ steps.meta.outputs.created }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

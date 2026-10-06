@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createBuildJobHandler, enqueueCandidateBuild } from '@/lib/editor-runtime/build-runtime';
 import { createEditorPublishingService, releaseArtifactsRoot } from '@/lib/editor-runtime/adapters';
+import { computeCandidateDigest } from '@/lib/publishing/snapshot';
+import { persistVerifiedGitHubBackupProof } from '@/lib/github/backup-service';
+import { fromReleaseSnapshot } from '@/lib/public-build/from-release';
+import { sha256Hex, stableJsonStringify } from '@/lib/stable-json';
 import { listJobs } from '@/lib/jobs/store';
 import { readRelease } from '@/lib/publishing/store';
 
@@ -38,6 +43,67 @@ async function previewReady() {
 }
 
 describe('production publishing task persistence', () => {
+  it('passes the frozen candidate identity through the persistent proof and real build handler', async () => {
+    vi.stubEnv('BLOG_BUILD_ROOT', path.join(process.env.BLOG_DATA_ROOT!, 'build'));
+    const dataRoot = process.env.BLOG_DATA_ROOT!;
+    fs.mkdirSync(path.join(dataRoot, 'articles'), { recursive: true });
+    fs.writeFileSync(path.join(dataRoot, 'articles', 'articles.json'), JSON.stringify([{
+      id: 'build-article', slug: 'build-article', title: 'Build article', date: '2026-10-01',
+      description: 'Handler integration fixture', tags: ['test'], content: '# Build article', createdAt: 1, updatedAt: 1,
+    }]));
+    const service = createEditorPublishingService();
+    const created = await service.createCandidate({ kind: 'article', articleId: 'build-article', action: 'publish' });
+    const backupProof = {
+      repository: 'test-owner/private-backup', commitSha: 'b'.repeat(40), snapshotId: `candidate-${created.release.id}`,
+      contentDigest: 'c'.repeat(64), candidateDigest: created.release.candidateDigest, verifiedAt: '2026-10-01T00:00:00.000Z',
+    };
+    await persistVerifiedGitHubBackupProof(backupProof, created.release.id);
+    const buildJob = (await listJobs()).find((job) => job.type === 'build');
+    expect(buildJob).toBeDefined();
+
+    await createBuildJobHandler()(buildJob!);
+
+    const ready = readRelease(created.release.id);
+    const artifactRoot = releaseArtifactsRoot(created.release.id);
+    const manifest = JSON.parse(fs.readFileSync(path.join(artifactRoot, 'artifacts.json'), 'utf8')) as {
+      candidateDigest: string;
+    };
+    const marker = JSON.parse(fs.readFileSync(path.join(artifactRoot, 'app', 'out', '_release.json'), 'utf8')) as {
+      releaseId: string;
+      candidateDigest: string;
+      snapshotDigest: string;
+    };
+    const projected = fromReleaseSnapshot(created.release.id, ready.snapshot);
+    const publicCandidateDigest = sha256Hex(stableJsonStringify(projected));
+    const frozenSnapshotDigest = sha256Hex(JSON.stringify(projected));
+    expect(ready.release.status).toBe('preview_ready');
+    expect(manifest.candidateDigest).toBe(computeCandidateDigest(ready.snapshot));
+    expect(publicCandidateDigest).not.toBe(manifest.candidateDigest);
+    expect(manifest.candidateDigest).toBe(created.release.candidateDigest);
+    // Both digests the child verified against the frozen bytes are sealed into the artifact.
+    expect(marker).toMatchObject({
+      releaseId: created.release.id,
+      candidateDigest: created.release.candidateDigest,
+      snapshotDigest: frozenSnapshotDigest,
+    });
+  }, 600_000);
+
+  it('rejects a build job whose digest is not the digest of the frozen release', async () => {
+    const dataRoot = process.env.BLOG_DATA_ROOT!;
+    fs.mkdirSync(path.join(dataRoot, 'articles'), { recursive: true });
+    fs.writeFileSync(path.join(dataRoot, 'articles', 'articles.json'), JSON.stringify([{
+      id: 'rejected-article', slug: 'rejected-article', title: 'Rejected article', date: '2026-10-01',
+      description: 'Digest rejection fixture', tags: ['test'], content: '# Rejected', createdAt: 1, updatedAt: 1,
+    }]));
+    const created = await createEditorPublishingService().createCandidate({ kind: 'article', articleId: 'rejected-article', action: 'publish' });
+    const job = await enqueueCandidateBuild(created.release.id, 'f'.repeat(64));
+    const statusBefore = readRelease(created.release.id).release.status;
+
+    await expect(createBuildJobHandler()(job)).rejects.toThrow(/frozen release/i);
+    expect(readRelease(created.release.id).release.status).toBe(statusBefore);
+    expect(fs.existsSync(releaseArtifactsRoot(created.release.id))).toBe(false);
+  });
+
   it('persists authorization and the sealed artifact identity with the real publish job', async () => {
     const test = await previewReady();
     const task = await test.service.confirm(test.release.id, test.payload);

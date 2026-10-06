@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GET } from '@/app/api/ready/route';
+import { acquireEditorDataRootLock, releaseEditorDataRootLock } from '@/lib/editor-data-lock';
 import {
   cleanupTempDirectories,
   createTempDirectory,
@@ -132,12 +133,94 @@ describe('ready API', () => {
               reason: 'remote-restore',
               attempts: 3,
               lastAttemptAt: '2026-06-19T00:10:00.000Z',
-              lastError: 'R2 upload failed.',
+              lastError: null,
             },
           ],
         },
       })
     );
+  });
+
+  it('never exposes raw backup error text to anonymous callers', async () => {
+    process.env.BLOG_DATA_ROOT = createDataRoot();
+    const sensitiveError = 'NoSuchBucket bucket=private-backups endpoint=https://acct123.r2.cloudflarestorage.com x-amz-request-id=ABC';
+    writeJson(path.join(process.env.BLOG_DATA_ROOT, '.backup-pending.json'), {
+      version: 2,
+      tasks: [
+        {
+          id: 'failed-task-2',
+          reason: 'remote-restore',
+          timestamp: '2026-06-19T00:00:00.000Z',
+          retries: 3,
+          attempts: 3,
+          status: 'failed',
+          writeSnapshot: true,
+          lastError: sensitiveError,
+          lastAttemptAt: '2026-06-19T00:10:00.000Z',
+        },
+      ],
+    });
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(JSON.stringify(payload)).not.toContain('private-backups');
+    expect(JSON.stringify(payload)).not.toContain('acct123');
+    expect(JSON.stringify(payload)).not.toContain('x-amz-request-id');
+    expect(payload.backupQueue.failed).toBe(1);
+    expect(payload.backupQueue.failedTasks[0].lastError).toBeNull();
+  });
+
+  it('reports corrupt persisted state files without touching or rewriting them', async () => {
+    const root = createDataRoot();
+    process.env.BLOG_DATA_ROOT = root;
+    const watermarkPath = path.join(root, 'workflow', 'backup-state.json');
+    const corruptWatermark = '{ "generation": broken';
+    const jobPath = path.join(root, 'workflow', 'jobs', 'corrupt-agent-job.json');
+    const corruptJob = '{ nope';
+    fs.mkdirSync(path.dirname(jobPath), { recursive: true });
+    fs.writeFileSync(watermarkPath, corruptWatermark, 'utf8');
+    fs.writeFileSync(jobPath, corruptJob, 'utf8');
+    const before = fs.readdirSync(root, { recursive: true }).sort();
+
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(payload.status).toBe('degraded');
+    expect(payload.persistedState).toEqual({
+      valid: false,
+      invalidFiles: [
+        { file: 'workflow/backup-state.json', reason: 'invalid backup watermark' },
+        { file: 'workflow/jobs/corrupt-agent-job.json', reason: 'invalid JSON' },
+      ],
+      jobCounts: { pending: 0, running: 0, failed: 0 },
+    });
+    expect(fs.readFileSync(watermarkPath, 'utf8')).toBe(corruptWatermark);
+    expect(fs.readFileSync(jobPath, 'utf8')).toBe(corruptJob);
+    expect(fs.readdirSync(root, { recursive: true }).sort()).toEqual(before);
+  });
+
+  it('answers readiness without waiting on the editor data write lock', async () => {
+    const root = createDataRoot();
+    process.env.BLOG_DATA_ROOT = root;
+    const lock = await acquireEditorDataRootLock(path.resolve(root));
+
+    try {
+      const response = await GET();
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(payload.status).toBe('ok');
+      expect(payload.persistedState).toEqual({
+        valid: true,
+        invalidFiles: [],
+        jobCounts: { pending: 0, running: 0, failed: 0 },
+      });
+      expect(fs.existsSync(path.join(root, '.data-write.lock'))).toBe(true);
+    } finally {
+      releaseEditorDataRootLock(lock);
+    }
   });
 
   it('keeps readiness ok when remote backup queue state is unreadable', async () => {

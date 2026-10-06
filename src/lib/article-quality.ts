@@ -1,3 +1,6 @@
+import { unified } from 'unified';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
 import type {
     ArticleKind,
     ArticleSourceLink,
@@ -80,24 +83,101 @@ export function countMarkdownWords(value: string): number {
     return cjkCount + wordCount;
 }
 
+type MarkdownAstNode = {
+    type: string;
+    depth?: number;
+    value?: string;
+    alt?: string | null;
+    children?: MarkdownAstNode[];
+    position?: { start: { offset?: number }; end: { offset?: number } };
+};
+
+const markdownHeadingParser = unified().use(remarkParse).use(remarkGfm);
+
+function collectHeadingNodes(node: MarkdownAstNode, result: MarkdownAstNode[]): void {
+    if (node.type === 'heading' && typeof node.depth === 'number') {
+        result.push(node);
+    }
+
+    node.children?.forEach((child) => collectHeadingNodes(child, result));
+}
+
+function getRenderedAstText(node: MarkdownAstNode): string {
+    if (node.type === 'text' || node.type === 'inlineCode') {
+        return node.value ?? '';
+    }
+
+    if (node.type === 'image' || node.type === 'imageReference') {
+        return node.alt ?? '';
+    }
+
+    if (node.type === 'break') {
+        return ' ';
+    }
+
+    // The renderer skips raw HTML, so its text must not reach heading anchors either.
+    if (node.type === 'html') {
+        return '';
+    }
+
+    return (node.children ?? []).map(getRenderedAstText).join('');
+}
+
+function getHeadingSourceText(content: string, node: MarkdownAstNode): string {
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+
+    if (typeof start !== 'number' || typeof end !== 'number') {
+        return '';
+    }
+
+    const firstLine = content.slice(start, end).split('\n', 1)[0]!.trim();
+    const atxMatch = /^#{1,6}(?:\s+(.*?))?\s*#*$/.exec(firstLine);
+
+    return atxMatch ? atxMatch[1] ?? '' : firstLine;
+}
+
+/** Line start of a heading, matching how the markdown renderer resolves heading anchors. */
+function getHeadingLineStart(content: string, node: MarkdownAstNode): number | null {
+    const start = node.position?.start.offset;
+
+    if (typeof start !== 'number') {
+        return null;
+    }
+
+    return content.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+}
+
+/**
+ * Headings are read from the same Markdown parser the renderer uses, so fenced or
+ * indented code, setext headings and raw HTML blocks cannot produce phantom anchors.
+ */
 export function getMarkdownHeadings(content: string, maxLevel = 4): MarkdownHeading[] {
+    const nodes: MarkdownAstNode[] = [];
+    collectHeadingNodes(markdownHeadingParser.parse(content) as MarkdownAstNode, nodes);
     const headings: MarkdownHeading[] = [];
     const allocateHeadingId = createMarkdownHeadingIdAllocator();
-    let index = 0;
 
-    for (const line of content.split('\n')) {
-        const match = /^(#{1,6})\s+(.+?)\s*#*$/.exec(line.trim());
+    for (const node of nodes) {
+        const level = node.depth ?? 0;
 
-        if (match && match[1].length <= maxLevel) {
-            headings.push({
-                level: match[1].length,
-                text: match[2],
-                id: allocateHeadingId(match[2]),
-                index,
-            });
+        if (level > maxLevel) {
+            continue;
         }
 
-        index += line.length + 1;
+        const text = getHeadingSourceText(content, node);
+        const index = getHeadingLineStart(content, node);
+
+        if (!text || index === null) {
+            continue;
+        }
+
+        headings.push({
+            level,
+            text,
+            id: allocateHeadingId(getRenderedAstText(node)),
+            index,
+        });
     }
 
     return headings;

@@ -1,3 +1,4 @@
+import { describeErrorForLog } from '@/lib/jobs/error-log';
 import { recordVerifiedFullBackup } from '@/lib/jobs/watermark';
 import {
     claimNextJob,
@@ -97,6 +98,8 @@ export interface WorkerLoopOptions extends WorkerOptions {
     signal?: AbortSignal;
 }
 
+const MAX_FAILURE_DELAY_MS = 30_000;
+
 function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
         const timer = setTimeout(resolve, milliseconds);
@@ -114,11 +117,28 @@ export async function runJobWorkerLoop(options: WorkerLoopOptions): Promise<void
     const localAbortController = new AbortController();
     const signal = options.signal ?? localAbortController.signal;
 
-    await recoverPersistedJobs({ ...(options.leaseMs ? { leaseMs: options.leaseMs } : {}) });
+    try {
+        await recoverPersistedJobs({ ...(options.leaseMs ? { leaseMs: options.leaseMs } : {}) });
+    } catch (error) {
+        // Recovery must not end the loop: damaged persisted state is reported
+        // (and surfaced by readiness) while unaffected jobs keep running.
+        console.error('[jobs-worker] Failed to recover persisted jobs; continuing to poll:', describeErrorForLog(error));
+    }
+
+    let failureDelayMs = 0;
+
     while (!signal.aborted) {
-        const job = await runJobWorkerOnce(options);
-        if (!job) {
-            await wait(pollIntervalMs, signal);
+        try {
+            const job = await runJobWorkerOnce(options);
+            failureDelayMs = 0;
+
+            if (!job) {
+                await wait(pollIntervalMs, signal);
+            }
+        } catch (error) {
+            failureDelayMs = Math.min(Math.max(failureDelayMs * 2, pollIntervalMs), MAX_FAILURE_DELAY_MS);
+            console.error('[jobs-worker] Job worker iteration failed; retrying:', describeErrorForLog(error));
+            await wait(failureDelayMs, signal);
         }
     }
 }

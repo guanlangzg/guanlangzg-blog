@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getPostsAsync } from '@/lib/markdown';
+import { getLivePostsFromSnapshot, getPostsAsync } from '@/lib/markdown';
 import { readSiteSettingsFromDiskAsync } from '@/lib/editor-data-storage';
+import { getPublicLiveSnapshot, isLiveReaderRuntime } from '@/lib/live-public-reader';
 import { getSiteUrl } from '@/lib/site-url';
 
 export const dynamic = 'force-dynamic';
@@ -29,10 +30,10 @@ function formatRssDate(value: string | Date): string {
 }
 
 export async function GET(): Promise<NextResponse> {
-    const [settings, posts] = await Promise.all([
-        readSiteSettingsFromDiskAsync(),
-        getPostsAsync(),
-    ]);
+    // One live snapshot per request: the channel metadata and the items must describe the same release.
+    const live = isLiveReaderRuntime() ? getPublicLiveSnapshot() : null;
+    const settings = live ? live.settings : await readSiteSettingsFromDiskAsync();
+    const posts = live ? getLivePostsFromSnapshot(live) : await getPostsAsync();
     const publicPosts = posts.filter((post) => !post.slugArray.includes('navigation'));
     const latestPostDate = publicPosts
         .map((post) => post.updatedDate || post.date)

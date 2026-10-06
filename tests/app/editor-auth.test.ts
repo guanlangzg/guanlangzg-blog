@@ -72,15 +72,28 @@ function useCorruptRuntimeAuthConfig(prefix: string): string {
   return configFilePath;
 }
 
+// Browser logins always carry Origin (non GET/HEAD requests) and a JSON
+// content type, so the default models the real login form request.
 function createJsonRequest(body: unknown, headersInit?: HeadersInit): NextRequest {
   const headers = new Headers(headersInit);
 
   headers.set('Content-Type', 'application/json');
+  headers.set('Origin', headers.get('Origin') ?? 'http://localhost');
 
   return new NextRequest('http://localhost/api/editor-auth', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+  });
+}
+
+// Raw-body variant for encoding-level cases (malformed JSON, foreign content
+// types) where the caller picks every header explicitly.
+function createRawLoginRequest(body: string, headersInit?: HeadersInit): NextRequest {
+  return new NextRequest('http://localhost/api/editor-auth', {
+    method: 'POST',
+    headers: new Headers(headersInit),
+    body,
   });
 }
 
@@ -422,12 +435,10 @@ describe('editor auth API', () => {
   it('rejects malformed and wrong login secrets without setting a session cookie', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'correct-secret';
 
-    const malformedResponse = await POST(
-      new NextRequest('http://localhost/api/editor-auth', {
-        method: 'POST',
-        body: '{',
-      })
-    );
+    const malformedResponse = await POST(createRawLoginRequest('{', {
+      'Content-Type': 'application/json',
+      Origin: 'http://localhost',
+    }));
     const wrongSecretResponse = await POST(createJsonRequest({ secret: 'wrong-secret' }));
 
     expect(malformedResponse.status).toBe(400);
@@ -439,6 +450,71 @@ describe('editor auth API', () => {
     expect(malformedResponse.headers.get('set-cookie')).toBeNull();
     expect(wrongSecretResponse.status).toBe(401);
     expect(wrongSecretResponse.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('rejects login posts from another origin without consuming the failure budget', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'correct-secret';
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const response = await POST(createJsonRequest(
+        { secret: 'correct-secret' },
+        { Origin: 'https://attacker.example' }
+      ));
+
+      expect(response.status).toBe(403);
+      expect(response.headers.get('set-cookie')).toBeNull();
+    }
+
+    const legitimateFailure = await POST(createJsonRequest({ secret: 'wrong-secret' }));
+
+    expect(legitimateFailure.status).toBe(401);
+
+    const legitimateLogin = await POST(createJsonRequest({ secret: 'correct-secret' }));
+
+    expect(legitimateLogin.status).toBe(200);
+    expect(legitimateLogin.headers.get('set-cookie')).toContain(`${EDITOR_SESSION_COOKIE}=`);
+  });
+
+  it('rejects non-JSON login bodies so cross-site text/plain posts never reach the limiter', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'correct-secret';
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const browserLikePost = await POST(createRawLoginRequest(
+        JSON.stringify({ secret: 'wrong-secret' }),
+        { 'Content-Type': 'text/plain', Origin: 'http://localhost' }
+      ));
+      const originlessPost = await POST(createRawLoginRequest(
+        JSON.stringify({ secret: 'correct-secret' }),
+        { 'Content-Type': 'text/plain;charset=UTF-8' }
+      ));
+
+      expect(browserLikePost.status).toBe(415);
+      expect(browserLikePost.headers.get('set-cookie')).toBeNull();
+      expect(originlessPost.status).toBe(415);
+      expect(originlessPost.headers.get('set-cookie')).toBeNull();
+    }
+
+    const legitimateFailure = await POST(createJsonRequest({ secret: 'wrong-secret' }));
+
+    expect(legitimateFailure.status).toBe(401);
+  });
+
+  it('accepts same-origin JSON logins and non-browser JSON clients without an Origin header', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'correct-secret';
+
+    const sameOriginLogin = await POST(createJsonRequest(
+      { secret: 'correct-secret' },
+      { Origin: 'http://localhost' }
+    ));
+    const scriptedLogin = await POST(createRawLoginRequest(
+      JSON.stringify({ secret: 'correct-secret' }),
+      { 'Content-Type': 'application/json' }
+    ));
+
+    expect(sameOriginLogin.status).toBe(200);
+    expect(sameOriginLogin.headers.get('set-cookie')).toContain(`${EDITOR_SESSION_COOKIE}=`);
+    expect(scriptedLogin.status).toBe(200);
+    expect(scriptedLogin.headers.get('set-cookie')).toContain(`${EDITOR_SESSION_COOKIE}=`);
   });
 
   it('sets an http-only editor session cookie for a valid login', async () => {

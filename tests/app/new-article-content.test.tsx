@@ -1,19 +1,50 @@
-import { act } from 'react';
+import { act, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewArticleContent } from '@/app/editor/(authenticated)/blog/new/NewArticleContent';
+import type { Article, Frontmatter } from '@/app/types/article';
+import { getArticleDraftKey, readStoredDraft } from '@/lib/article-draft-storage';
 
 const replaceMock = vi.fn();
 const createArticleMock = vi.fn();
 const updateArticleContentMock = vi.fn();
 const getArticleByIdMock = vi.fn();
 const exportArticleMock = vi.fn();
+const DRAFT_KEY = getArticleDraftKey('new:blank');
+
+// Stateful search params double so tests can apply the same route transition
+// router.replace requests in the real app.
+let searchParamsValue = 'template=blank';
+const searchParamsListeners = new Set<() => void>();
+
+function setSearchParams(next: string): void {
+  searchParamsValue = next;
+
+  for (const listener of searchParamsListeners) {
+    listener();
+  }
+}
+
+function useSearchParamsDouble(): URLSearchParams {
+  const [, forceRender] = useState(0);
+
+  useEffect(() => {
+    const listener = () => forceRender((value) => value + 1);
+    searchParamsListeners.add(listener);
+
+    return () => {
+      searchParamsListeners.delete(listener);
+    };
+  }, []);
+
+  return new URLSearchParams(searchParamsValue);
+}
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     replace: replaceMock,
   }),
-  useSearchParams: () => new URLSearchParams('template=blank'),
+  useSearchParams: () => useSearchParamsDouble(),
 }));
 
 vi.mock('@/app/hooks/useLocalArticles', () => ({
@@ -52,16 +83,96 @@ function getButtonByText(container: HTMLElement, text: string): HTMLButtonElemen
   return button;
 }
 
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+
+  valueSetter?.call(textarea, value);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function pressSaveShortcut(textarea: HTMLTextAreaElement): void {
+  textarea.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 's',
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  }));
+}
+
 describe('NewArticleContent', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let isMounted: boolean;
+  let articles: Article[];
+
+  function createStoredArticle(frontmatter: Frontmatter, content: string): Article {
+    const article: Article = {
+      id: `article-${articles.length + 1}`,
+      title: frontmatter.title || 'Untitled',
+      slug: 'article-slug',
+      date: frontmatter.date,
+      description: frontmatter.description ?? '',
+      kind: frontmatter.kind ?? 'essay',
+      status: frontmatter.status ?? 'draft',
+      featured: Boolean(frontmatter.featured),
+      tags: frontmatter.tags ?? [],
+      content,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    articles = [article, ...articles];
+
+    return article;
+  }
+
+  function unmountRoot(): void {
+    if (!isMounted) {
+      return;
+    }
+
+    isMounted = false;
+    act(() => {
+      root.unmount();
+    });
+  }
 
   beforeEach(() => {
     replaceMock.mockReset();
-    createArticleMock.mockReset();
-    updateArticleContentMock.mockReset();
-    getArticleByIdMock.mockReset();
+    createArticleMock.mockReset().mockImplementation((frontmatter: Frontmatter, content: string) =>
+      createStoredArticle(frontmatter, content)
+    );
+    updateArticleContentMock.mockReset().mockImplementation((id: string, frontmatter: Frontmatter, content: string) => {
+      const existing = articles.find((article) => article.id === id);
+
+      if (!existing) {
+        return null;
+      }
+
+      const updated: Article = {
+        ...existing,
+        title: frontmatter.title,
+        date: frontmatter.date,
+        description: frontmatter.description,
+        kind: frontmatter.kind ?? 'essay',
+        status: frontmatter.status ?? 'draft',
+        featured: Boolean(frontmatter.featured),
+        tags: frontmatter.tags ?? [],
+        content,
+        updatedAt: 2,
+      };
+
+      articles = articles.map((article) => (article.id === id ? updated : article));
+
+      return updated;
+    });
+    getArticleByIdMock.mockReset().mockImplementation((id: string) =>
+      articles.find((article) => article.id === id)
+    );
     exportArticleMock.mockReset().mockReturnValue('# Article');
+    articles = [];
+    searchParamsValue = 'template=blank';
+    searchParamsListeners.clear();
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0);
@@ -73,12 +184,11 @@ describe('NewArticleContent', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
+    isMounted = true;
   });
 
   afterEach(() => {
-    act(() => {
-      root.unmount();
-    });
+    unmountRoot();
     container.remove();
     vi.unstubAllGlobals();
   });
@@ -157,5 +267,182 @@ describe('NewArticleContent', () => {
     expect(container.textContent).toContain('尚未保存到文章库');
     expect(container.textContent).not.toContain('内容已保存');
     expect(saveButton.className).toContain('bg-fg');
+  });
+
+  it('creates a single article when the save shortcut is pressed twice in a row', async () => {
+    await act(async () => {
+      root.render(<NewArticleContent />);
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor');
+
+    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+
+    await act(async () => {
+      setTextareaValue(textarea as HTMLTextAreaElement, 'First body');
+    });
+    await act(async () => {
+      pressSaveShortcut(textarea as HTMLTextAreaElement);
+      pressSaveShortcut(textarea as HTMLTextAreaElement);
+    });
+
+    expect(createArticleMock).toHaveBeenCalledTimes(1);
+    expect(articles).toHaveLength(1);
+    expect(articles[0]?.content).toBe('First body');
+  });
+
+  it('updates the created article instead of creating another one when saving again before the route switches', async () => {
+    await act(async () => {
+      root.render(<NewArticleContent />);
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    await act(async () => {
+      setTextareaValue(textarea, 'First body');
+    });
+    await act(async () => {
+      pressSaveShortcut(textarea);
+    });
+
+    expect(createArticleMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      setTextareaValue(textarea, 'Second body');
+    });
+    await act(async () => {
+      pressSaveShortcut(textarea);
+    });
+
+    expect(createArticleMock).toHaveBeenCalledTimes(1);
+    expect(updateArticleContentMock).toHaveBeenCalledWith('article-1', expect.anything(), 'Second body');
+    expect(articles).toHaveLength(1);
+    expect(articles[0]?.content).toBe('Second body');
+  });
+
+  it('keeps saving into the created article after the new-article route switches to its edit URL', async () => {
+    await act(async () => {
+      root.render(<NewArticleContent />);
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    await act(async () => {
+      setTextareaValue(textarea, 'First body');
+    });
+    await act(async () => {
+      pressSaveShortcut(textarea);
+    });
+
+    expect(replaceMock).toHaveBeenCalledWith('/editor/blog/new?edit=article-1');
+
+    await act(async () => {
+      setSearchParams('edit=article-1');
+    });
+
+    const reloadedTextarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    expect(container.textContent).toContain('编辑文章');
+    expect(reloadedTextarea.value).toBe('First body');
+
+    await act(async () => {
+      setTextareaValue(reloadedTextarea, 'First body revised');
+    });
+    await act(async () => {
+      pressSaveShortcut(reloadedTextarea);
+    });
+
+    expect(createArticleMock).toHaveBeenCalledTimes(1);
+    expect(updateArticleContentMock).toHaveBeenLastCalledWith('article-1', expect.anything(), 'First body revised');
+  });
+
+  it('creates a new article when the editor returns to the blank new-article route', async () => {
+    await act(async () => {
+      root.render(<NewArticleContent />);
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    await act(async () => {
+      setTextareaValue(textarea, 'First body');
+    });
+    await act(async () => {
+      pressSaveShortcut(textarea);
+    });
+
+    expect(createArticleMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      setSearchParams('edit=article-1');
+    });
+    // Going back to the blank URL is a new article; the component instance survives
+    // the query-only route change, so the previously created id must not be reused.
+    await act(async () => {
+      setSearchParams('template=blank');
+    });
+
+    const blankTextarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    await act(async () => {
+      setTextareaValue(blankTextarea, 'Second body');
+    });
+    await act(async () => {
+      pressSaveShortcut(blankTextarea);
+    });
+
+    expect(createArticleMock).toHaveBeenCalledTimes(2);
+    expect(updateArticleContentMock).not.toHaveBeenCalledWith('article-1', expect.anything(), 'Second body');
+    expect(articles.map((article) => article.content).sort()).toEqual(['First body', 'Second body']);
+  });
+
+  it('flushes the unsaved draft before unload and on unmount', async () => {
+    await act(async () => {
+      root.render(<NewArticleContent />);
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    await act(async () => {
+      setTextareaValue(textarea, 'Draft body');
+    });
+
+    expect(readStoredDraft(DRAFT_KEY)).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+
+    expect(readStoredDraft(DRAFT_KEY)?.content).toBe('Draft body');
+
+    await act(async () => {
+      setTextareaValue(textarea, 'Draft body updated');
+    });
+    unmountRoot();
+
+    expect(readStoredDraft(DRAFT_KEY)?.content).toBe('Draft body updated');
+  });
+
+  it('does not recreate the cleared draft after a successful save', async () => {
+    await act(async () => {
+      root.render(<NewArticleContent />);
+    });
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('#article-markdown-editor') as HTMLTextAreaElement;
+
+    await act(async () => {
+      setTextareaValue(textarea, 'Saved body');
+    });
+    await act(async () => {
+      pressSaveShortcut(textarea);
+    });
+
+    expect(readStoredDraft(DRAFT_KEY)).toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    unmountRoot();
+
+    expect(readStoredDraft(DRAFT_KEY)).toBeNull();
   });
 });

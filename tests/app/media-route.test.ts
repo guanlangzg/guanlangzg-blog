@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { NextRequest } from 'next/server';
@@ -6,6 +7,10 @@ import { POST } from '@/app/api/data/media/route';
 import { GET as GET_MEDIA } from '@/app/media/[...path]/route';
 import { POST as loginEditor } from '@/app/api/editor-auth/route';
 import { EDITOR_CSRF_COOKIE, EDITOR_CSRF_HEADER, EDITOR_SESSION_COOKIE } from '@/lib/editor-auth';
+import { DEFAULT_SITE_SETTINGS } from '@/lib/site-settings';
+import { computeCandidateDigest } from '@/lib/publishing/snapshot';
+import { writeLivePointer, writeRelease } from '@/lib/publishing/store';
+import type { SiteSnapshot } from '@/lib/publishing/types';
 import { EDITOR_MEDIA_MAX_IMAGE_BYTES } from '@/lib/editor-media-storage';
 import { queueCurrentBackupToRemote } from '@/lib/editor-remote-backup';
 import {
@@ -21,6 +26,8 @@ vi.mock('@/lib/editor-remote-backup', () => ({
 
 const mockedQueueCurrentBackupToRemote = vi.mocked(queueCurrentBackupToRemote);
 const ORIGINAL_ENV = {
+  NODE_ENV: process.env.NODE_ENV,
+  BLOG_NAVIGATION_DOCKER: process.env.BLOG_NAVIGATION_DOCKER,
   BLOG_DATA_ROOT: process.env.BLOG_DATA_ROOT,
   EDITOR_ACCESS_TOKEN: process.env.EDITOR_ACCESS_TOKEN,
 };
@@ -126,6 +133,30 @@ afterEach(() => {
   cleanupTempDirectories(tempDirectories);
 });
 
+function publishLiveMediaRelease(
+  asset: { path: string; publicPath: string; hash: string; size: number },
+  releaseId: string
+): void {
+  const snapshot: SiteSnapshot = {
+    schemaVersion: 1, siteId: 'media-reader-site',
+    articles: [{ id: 'live-article', slug: 'live-article', title: 'Live', date: '', description: '', tags: [], content: `![image](${asset.publicPath})`, createdAt: 1, updatedAt: 1 }],
+    navigation: [], settings: { ...DEFAULT_SITE_SETTINGS },
+    media: [{ originalPath: asset.path, publicPath: asset.publicPath, sha256: asset.hash, size: asset.size, mimeType: 'image/png' }],
+    redirects: [], removedPaths: [],
+  };
+  const candidateDigest = computeCandidateDigest(snapshot);
+  const artifactDigest = 'a'.repeat(64);
+  const now = '2026-10-05T00:00:00.000Z';
+
+  writeRelease({
+    schemaVersion: 1, id: releaseId, scope: { kind: 'bootstrap', articleIds: [] }, baseLiveReleaseId: null,
+    selectedRevision: 'b'.repeat(64), candidateDigest, artifactDigest, status: 'live', backupProof: null,
+    publicCommitSha: 'c'.repeat(40), workflowRunId: 1, workflowRunAttempt: 1, retryFromAttempt: null,
+    error: null, createdAt: now, updatedAt: now,
+  }, snapshot);
+  writeLivePointer({ schemaVersion: 1, releaseId, candidateDigest, artifactDigest, publicCommitSha: 'c'.repeat(40), workflowRunId: 1, workflowRunAttempt: 1, verifiedAt: now });
+}
+
 describe('media API', () => {
   it('rejects unauthenticated uploads', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
@@ -140,8 +171,137 @@ describe('media API', () => {
     expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
-  it('stores uploaded images locally, serves them, and queues a JSON backup sync', async () => {
+  it('serves an upload anonymously only after a live release references it', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    vi.stubEnv('NODE_ENV', 'test');
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const dataRoot = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = dataRoot;
+    const upload = await POST(await createAuthedEditorRequest('http://localhost/api/data/media', {
+      method: 'POST', ...createImageUpload(),
+    }));
+    const payload = await upload.json();
+    const asset = payload.asset as { path: string; publicPath: string; hash: string; size: number };
+    const params = { params: Promise.resolve({ path: asset.path.split('/') }) };
+    const hidden = await GET_MEDIA(new NextRequest(`http://localhost${asset.publicPath}`), params);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dataRoot, 'media', 'manifest.json'), 'utf8')) as {
+      assets: Array<{ path: string; hash: string; size: number }>;
+    };
+    manifest.assets[0] = { ...manifest.assets[0], path: asset.path, hash: asset.hash, size: asset.size };
+    fs.writeFileSync(path.join(dataRoot, 'media', 'manifest.json'), JSON.stringify(manifest));
+    const snapshot: SiteSnapshot = {
+      schemaVersion: 1, siteId: 'media-reader-site',
+      articles: [{ id: 'live-article', slug: 'live-article', title: 'Live', date: '', description: '', tags: [], content: `![image](${asset.publicPath})`, createdAt: 1, updatedAt: 1 }],
+      navigation: [], settings: { ...DEFAULT_SITE_SETTINGS },
+      media: [{ originalPath: asset.path, publicPath: asset.publicPath, sha256: asset.hash, size: asset.size, mimeType: 'image/png' }],
+      redirects: [], removedPaths: [],
+    };
+    const releaseId = 'media-reader-release';
+    const candidateDigest = computeCandidateDigest(snapshot);
+    const artifactDigest = 'a'.repeat(64);
+    const now = '2026-10-05T00:00:00.000Z';
+    writeRelease({
+      schemaVersion: 1, id: releaseId, scope: { kind: 'bootstrap', articleIds: [] }, baseLiveReleaseId: null,
+      selectedRevision: 'b'.repeat(64), candidateDigest, artifactDigest, status: 'live', backupProof: null,
+      publicCommitSha: 'c'.repeat(40), workflowRunId: 1, workflowRunAttempt: 1, retryFromAttempt: null,
+      error: null, createdAt: now, updatedAt: now,
+    }, snapshot);
+    writeLivePointer({ schemaVersion: 1, releaseId, candidateDigest, artifactDigest, publicCommitSha: 'c'.repeat(40), workflowRunId: 1, workflowRunAttempt: 1, verifiedAt: now });
+    const publicResponse = await GET_MEDIA(new NextRequest(`http://localhost${asset.publicPath}`), params);
+
+    expect(hidden.status).toBe(404);
+    expect(publicResponse.status).toBe(200);
+    expect(new Uint8Array(await publicResponse.arrayBuffer())).toEqual(PNG_BYTES);
+    expect(publicResponse.headers.get('cache-control')).toBe('public, max-age=300, stale-while-revalidate=600');
+  });
+
+  it('refuses an anonymously referenced asset whose working-copy bytes no longer match the live snapshot', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    vi.stubEnv('NODE_ENV', 'test');
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const dataRoot = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = dataRoot;
+    const upload = await POST(await createAuthedEditorRequest('http://localhost/api/data/media', {
+      method: 'POST', ...createImageUpload(),
+    }));
+    const asset = (await upload.json()).asset as { path: string; publicPath: string; hash: string; size: number };
+    const manifestPath = path.join(dataRoot, 'media', 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      assets: Array<{ path: string; hash: string; size: number }>;
+    };
+    manifest.assets[0] = { ...manifest.assets[0], path: asset.path, hash: asset.hash, size: asset.size };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    publishLiveMediaRelease(asset, 'media-reader-tampered-release');
+    const params = { params: Promise.resolve({ path: asset.path.split('/') }) };
+
+    fs.writeFileSync(path.join(dataRoot, 'media', asset.path), PNG_BYTES_ALT);
+    const anonymousResponse = await GET_MEDIA(new NextRequest(`http://localhost${asset.publicPath}`), params);
+
+    expect(PNG_BYTES_ALT.byteLength).toBe(PNG_BYTES.byteLength);
+    expect(anonymousResponse.status).toBe(404);
+    expect(new Uint8Array(await anonymousResponse.arrayBuffer())).not.toEqual(PNG_BYTES_ALT);
+  });
+
+  it('serves a live-referenced asset anonymously when the working manifest no longer lists it', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    vi.stubEnv('NODE_ENV', 'test');
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const dataRoot = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = dataRoot;
+    const upload = await POST(await createAuthedEditorRequest('http://localhost/api/data/media', {
+      method: 'POST', ...createImageUpload(),
+    }));
+    const asset = (await upload.json()).asset as { path: string; publicPath: string; hash: string; size: number };
+    // A restore or a manual manifest edit can drop the entry while the published bytes stay on
+    // disk; the frozen live release is still the authority for what a reader may fetch.
+    fs.rmSync(path.join(dataRoot, 'media', 'manifest.json'), { force: true });
+    publishLiveMediaRelease(asset, 'media-reader-manifestless-release');
+    const params = { params: Promise.resolve({ path: asset.path.split('/') }) };
+
+    const anonymousResponse = await GET_MEDIA(new NextRequest(`http://localhost${asset.publicPath}`), params);
+
+    expect(anonymousResponse.status).toBe(200);
+    expect(new Uint8Array(await anonymousResponse.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
+  it('refuses an asset whose bytes and working manifest were rewritten together', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    vi.stubEnv('NODE_ENV', 'test');
+    process.env.BLOG_NAVIGATION_DOCKER = 'true';
+    const dataRoot = createTempDataRoot();
+    process.env.BLOG_DATA_ROOT = dataRoot;
+    const upload = await POST(await createAuthedEditorRequest('http://localhost/api/data/media', {
+      method: 'POST', ...createImageUpload(),
+    }));
+    const asset = (await upload.json()).asset as { path: string; publicPath: string; hash: string; size: number };
+    const manifestPath = path.join(dataRoot, 'media', 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      assets: Array<{ id: string; path: string; hash: string; size: number }>;
+    };
+    const rewrittenHash = createHash('sha256').update(PNG_BYTES_ALT).digest('hex');
+    manifest.assets[0] = {
+      ...manifest.assets[0],
+      id: rewrittenHash,
+      path: asset.path,
+      hash: rewrittenHash,
+      size: PNG_BYTES_ALT.byteLength,
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    publishLiveMediaRelease(asset, 'media-reader-rewritten-release');
+    const params = { params: Promise.resolve({ path: asset.path.split('/') }) };
+
+    fs.writeFileSync(path.join(dataRoot, 'media', asset.path), PNG_BYTES_ALT);
+    const anonymousResponse = await GET_MEDIA(new NextRequest(`http://localhost${asset.publicPath}`), params);
+
+    expect(PNG_BYTES_ALT.byteLength).toBe(PNG_BYTES.byteLength);
+    expect(anonymousResponse.status).toBe(404);
+    expect(new Uint8Array(await anonymousResponse.arrayBuffer())).not.toEqual(PNG_BYTES_ALT);
+  });
+
+  it('stores uploads for editors and never exposes an unreferenced working-copy asset anonymously', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    delete process.env.BLOG_NAVIGATION_DOCKER;
+    delete process.env.BLOG_NAVIGATION_DOCKER;
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
 
     const response = await POST(
@@ -185,9 +345,8 @@ describe('media API', () => {
         path: asset.path,
       }),
     ]);
-    // The legacy /media path reads the working copy, so only an authenticated admin may
-    // read it and the response must not be cached by a shared proxy.
-    expect(anonymousFileResponse.status).toBe(401);
+    // Anonymous access is restricted to assets referenced by the verified live snapshot.
+    expect(anonymousFileResponse.status).toBe(404);
     expect(new Uint8Array(await anonymousFileResponse.arrayBuffer())).not.toEqual(PNG_BYTES);
     expect(fileResponse.status).toBe(200);
     expect(fileResponse.headers.get('content-type')).toBe('image/png');
@@ -269,6 +428,35 @@ describe('media API', () => {
       code: 'runtime_data_root_unavailable',
       message: '运行时数据目录不可用，请检查服务器数据目录路径和写入权限。',
     });
+    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
+  });
+
+  it('refuses uploads while backup bookkeeping is damaged', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    process.env.BLOG_DATA_ROOT = createTempDataRoot();
+
+    const headers = await createAuthenticatedHeaders();
+    // Media is content too: a corrupt job file must stop the upload instead of
+    // letting the manifest change without its dirty watermark entry.
+    fs.mkdirSync(path.join(process.env.BLOG_DATA_ROOT, 'workflow', 'jobs'), { recursive: true });
+    fs.writeFileSync(path.join(process.env.BLOG_DATA_ROOT, 'workflow', 'jobs', 'corrupt.json'), '{ not json', 'utf8');
+
+    const upload = createImageUpload();
+    const requestHeaders = new Headers(headers);
+
+    for (const [name, value] of Object.entries(upload.headers)) {
+      requestHeaders.set(name, value);
+    }
+
+    const response = await POST(new NextRequest('http://localhost/api/data/media', {
+      method: 'POST',
+      headers: requestHeaders,
+      body: upload.body,
+    }));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'backup_state_invalid' });
+    expect(fs.existsSync(path.join(process.env.BLOG_DATA_ROOT, 'media', 'manifest.json'))).toBe(false);
     expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 

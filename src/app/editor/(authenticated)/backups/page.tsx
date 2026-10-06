@@ -5,6 +5,7 @@ import { AlertTriangle, Archive, GitCommitHorizontal, RefreshCcw, RotateCcw } fr
 import { StatusMessage } from '@/app/components/ui';
 import { EditorButton, EditorMain, EditorPage, EditorPanel, EditorTopBar } from '@/app/editor/components/EditorShell';
 import { LogoutButton } from '@/app/editor/components/LogoutButton';
+import { readApiErrorMessage } from '@/app/editor/api-error-message';
 import { createEditorCsrfHeaders } from '@/app/editor/editor-csrf';
 
 type BackupRecord = { commitSha: string; committedAt: string; digest: string | null; source: 'remote' };
@@ -56,7 +57,7 @@ export default function BackupsPage() {
       if (cursor) query.set('cursor', cursor);
       const response = await fetch(`/api/editor/backups?${query}`, { credentials: 'include', cache: 'no-store' });
       const payload = await readPayload<BackupList>(response);
-      if (!response.ok) throw new Error(`HTTP ${response.status}：远端备份历史暂不可查询。`);
+      if (!response.ok) throw new Error(readApiErrorMessage(payload, `HTTP ${response.status}：远端备份历史暂不可查询。`));
       if (!payload || payload.status !== 'available' || !Array.isArray(payload.items)) {
         const reason = payload?.unavailableReason === 'not_connected'
           ? 'GitHub 备份尚未连接。'
@@ -97,7 +98,7 @@ export default function BackupsPage() {
         headers: createEditorCsrfHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({}),
       });
       const payload = await readPayload<{ jobId?: string; snapshotId?: string; message?: string }>(response);
-      if (!response.ok) throw new Error(payload?.message || `创建备份失败（HTTP ${response.status}）。`);
+      if (!response.ok) throw new Error(readApiErrorMessage(payload, `创建备份失败（HTTP ${response.status}）。`));
       const summary = `创建备份响应 HTTP ${response.status}${payload?.jobId ? `；任务 ${payload.jobId}` : ''}${payload?.snapshotId ? `；快照 ${payload.snapshotId}` : ''}${payload?.message ? `；${payload.message}` : ''}`;
       setMessage({ tone: 'info', text: summary });
       setBackupJobId(payload?.jobId ?? null);
@@ -119,8 +120,8 @@ export default function BackupsPage() {
         body: JSON.stringify({ baseRevision: plan.binding.currentRevision, choices: plan.conflicts.map((conflict) => ({ conflictId: conflict.conflictId, resolution: choices[conflict.conflictId] })) }),
       });
       const payload = await readPayload<{ generation?: string; message?: string }>(response);
-      if (response.status === 422) throw new Error(payload?.message || '冲突选择无效或不完整，请重新审阅恢复计划。');
-      if (!response.ok) throw new Error(payload?.message || `应用合并恢复失败（HTTP ${response.status}）。`);
+      if (response.status === 422) throw new Error(readApiErrorMessage(payload, '冲突选择无效或不完整，请重新审阅恢复计划。'));
+      if (!response.ok) throw new Error(readApiErrorMessage(payload, `应用合并恢复失败（HTTP ${response.status}）。`));
       if (!payload?.generation) throw new Error('恢复接口未返回 generation，无法确认已完成。');
       setMessage({ tone: 'success', text: `应用合并响应 HTTP ${response.status}；恢复世代 ${payload.generation}。当前数据已更新，尚未发布。` });
       setPlan(null);
@@ -181,7 +182,7 @@ async function createPlanFor(
     const response = await fetch('/api/editor/restore-plans', { method: 'POST', credentials: 'include', headers: createEditorCsrfHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ backupCommit: commit }) });
     const result = await readPayload<{ planId?: string; conflictCount?: number; message?: string }>(response);
     if (!response.ok || response.status !== 200 || !result?.planId || typeof result.conflictCount !== 'number') {
-      setMessage({ tone: 'danger', text: result?.message || `同步创建恢复计划失败（HTTP ${response.status}）。` });
+      setMessage({ tone: 'danger', text: readApiErrorMessage(result, `同步创建恢复计划失败（HTTP ${response.status}）。`) });
       return;
     }
     setMessage({ tone: 'info', text: `恢复计划同步创建响应 HTTP ${response.status}；计划 ${result.planId}，冲突 ${result.conflictCount} 项。` });

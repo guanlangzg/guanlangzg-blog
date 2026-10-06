@@ -143,6 +143,11 @@ export function NewArticleContent() {
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
   const hasSelectedInitialMode = useRef(false);
   const deferredContent = useDeferredValue(content);
+  // Remembers which article this draft URL already created so a repeated save
+  // (for example a held shortcut) updates it instead of creating a duplicate.
+  const createdArticleRef = useRef<{ draftKey: string; articleId: string } | null>(null);
+  const saveStateTimerRef = useRef<number | null>(null);
+  const draftRef = useRef({ draftKey, loadedArticleKey, content, frontmatter, savedSnapshot });
 
   const currentSnapshot = useMemo(() => createArticleSnapshot(frontmatter, content), [content, frontmatter]);
   const isDirty = Boolean(savedSnapshot && currentSnapshot !== savedSnapshot);
@@ -256,6 +261,48 @@ export function NewArticleContent() {
   }, [articleKey, draftKey, editId, getArticleById, isLoaded, loadedArticleKey, templateId]);
 
   useEffect(() => {
+    draftRef.current = { draftKey, loadedArticleKey, content, frontmatter, savedSnapshot };
+  });
+
+  // This page component stays mounted when the route switches from the blank draft URL to its
+  // `?edit=<id>` URL, so the ref must not outlive the route that created it: returning to the blank
+  // URL is a new article, not a continuation of the one that URL previously created.
+  useEffect(() => {
+    createdArticleRef.current = null;
+  }, [articleKey]);
+
+  useEffect(() => {
+    const flushDraft = () => {
+      const latest = draftRef.current;
+
+      if (!latest.loadedArticleKey) {
+        return;
+      }
+
+      if (createArticleSnapshot(latest.frontmatter, latest.content) === latest.savedSnapshot) {
+        return;
+      }
+
+      writeStoredDraft(latest.draftKey, latest.frontmatter, latest.content);
+    };
+
+    // pagehide covers tab close/reload before the debounce fires; the cleanup
+    // covers leaving the editor through client navigation.
+    window.addEventListener('pagehide', flushDraft);
+
+    return () => {
+      window.removeEventListener('pagehide', flushDraft);
+      flushDraft();
+    };
+  }, []);
+
+  useEffect(() => () => {
+    if (saveStateTimerRef.current !== null) {
+      window.clearTimeout(saveStateTimerRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!isDirty || loadedArticleKey !== articleKey) {
       return;
     }
@@ -356,28 +403,43 @@ export function NewArticleContent() {
     }
 
     const normalizedFrontmatter = normalizeFrontmatter(frontmatter);
+    const nextSnapshot = createArticleSnapshot(normalizedFrontmatter, content);
 
     setSaveState('saving');
     setStatusMessage(null);
 
     try {
-      let savedArticleId = editId;
+      const createdArticleId = createdArticleRef.current?.draftKey === draftKey
+        ? createdArticleRef.current.articleId
+        : null;
+      const targetArticleId = editId || createdArticleId;
+      const updated = targetArticleId
+        ? updateArticleContent(targetArticleId, normalizedFrontmatter, content)
+        : null;
+      let savedArticleId = targetArticleId;
 
-      if (editId) {
-        const updated = updateArticleContent(editId, normalizedFrontmatter, content);
-
-        if (!updated) {
+      if (!updated) {
+        if (editId) {
           throw new Error('article_not_found');
         }
-      } else {
+
         const created = createArticle(normalizedFrontmatter, content);
         savedArticleId = created.id;
+        createdArticleRef.current = { draftKey, articleId: created.id };
       }
 
       setFrontmatter(normalizedFrontmatter);
-      setSavedSnapshot(createArticleSnapshot(normalizedFrontmatter, content));
+      setSavedSnapshot(nextSnapshot);
       clearStoredDraft(draftKey);
       setDraftSavedAt(null);
+      // Keep an unload flush from restoring the draft that was just saved away.
+      draftRef.current = {
+        draftKey,
+        loadedArticleKey: articleKey,
+        content,
+        frontmatter: normalizedFrontmatter,
+        savedSnapshot: nextSnapshot,
+      };
       setSaveState('saved');
       setStatusMessage({ tone: 'success', text: '文章已保存。' });
 
@@ -385,13 +447,17 @@ export function NewArticleContent() {
         router.replace(`/editor/blog/new?edit=${savedArticleId}`);
       }
 
-      window.setTimeout(() => setSaveState('idle'), 1800);
+      if (saveStateTimerRef.current !== null) {
+        window.clearTimeout(saveStateTimerRef.current);
+      }
+
+      saveStateTimerRef.current = window.setTimeout(() => setSaveState('idle'), 1800);
     } catch (error) {
       console.error('Save failed:', error);
       setSaveState('error');
       setStatusMessage({ tone: 'danger', text: '保存失败，请稍后重试。' });
     }
-  }, [activeTemplate, content, createArticle, draftKey, editId, frontmatter, handleResolveQualityCheck, router, updateArticleContent]);
+  }, [activeTemplate, articleKey, content, createArticle, draftKey, editId, frontmatter, handleResolveQualityCheck, router, updateArticleContent]);
 
   const handleExport = useCallback(() => {
     const normalizedFrontmatter = normalizeFrontmatter(frontmatter);

@@ -11,6 +11,11 @@
     "scripts/**/*.{ts,mjs}",
     "tests/**/*.{ts,tsx}"
   ],
+  // "exports" / "types" stay OFF on purpose: `npx knip --exports` currently reports
+  // 25 unused exports plus 22 unused exported types, all in src/lib files owned by
+  // other workstreams. Turning the rule on here would make `npm run deadcode` - and
+  // therefore CI - fail on that pre-existing debt instead of on new regressions.
+  // Enable it in the same change that removes those exports.
   "include": [
     "files",
     "dependencies",

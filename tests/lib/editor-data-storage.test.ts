@@ -20,8 +20,11 @@ import {
     withEditorDataRootLock,
     writeArticlesToDisk,
     writeArticlesToDiskIfRevisionMatches,
+    writeNavigationToDisk,
+    writeSiteSettingsToDisk,
     EditorDataRestoreIncompleteError,
 } from '@/lib/editor-data-storage';
+import { BackupStateInvalidError } from '@/lib/jobs/watermark';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 import { getSearchIndexFilePath } from '@/lib/search-index';
 import { getEditorAuditLogFilePath } from '@/lib/editor-audit-log';
@@ -504,5 +507,92 @@ describe('editor data storage configuration', () => {
         expect(openedPaths.some((filePath) =>
             filePath.includes('.restore-backup') && filePath.endsWith(path.join('articles', 'articles.json'))
         )).toBe(true);
+    });
+
+    it('refuses article, navigation, and settings writes before touching data when the backup watermark is corrupt', async () => {
+        const tempRoot = createTempDataRoot();
+        const originalArticles = [createArticle('article-1', 'Original Article')];
+        const originalNavigation = [{
+            name: 'Docs',
+            icon: 'book',
+            slug: 'docs',
+            tools: [{
+                icon: 'link',
+                title: 'Example Docs',
+                description: 'Reference documentation',
+                url: 'https://example.com/docs',
+                tags: ['docs'],
+            }],
+        }];
+        await writeArticlesToDisk(originalArticles);
+        await writeNavigationToDisk(originalNavigation);
+        await writeSiteSettingsToDisk(DEFAULT_SITE_SETTINGS);
+
+        const trackedFiles = [
+            path.join(tempRoot, 'articles', 'articles.json'),
+            path.join(tempRoot, 'navigation', 'tools.json'),
+            path.join(tempRoot, 'settings', 'site.json'),
+            path.join(tempRoot, 'manifest.json'),
+        ];
+        const before = trackedFiles.map((filePath) => fs.readFileSync(filePath));
+        const jobsDirectory = path.join(tempRoot, 'workflow', 'jobs');
+        const jobsBefore = fs.readdirSync(jobsDirectory);
+        const watermarkPath = path.join(tempRoot, 'workflow', 'backup-state.json');
+        const corruptWatermark = '{ "generation": "broken"';
+        writeText(watermarkPath, corruptWatermark);
+
+        await expect(writeArticlesToDisk([createArticle('article-2', 'Next Article')]))
+            .rejects.toBeInstanceOf(BackupStateInvalidError);
+        await expect(writeNavigationToDisk([]))
+            .rejects.toBeInstanceOf(BackupStateInvalidError);
+        await expect(writeSiteSettingsToDisk({ ...DEFAULT_SITE_SETTINGS, siteName: 'Changed Name' }))
+            .rejects.toBeInstanceOf(BackupStateInvalidError);
+
+        expect(trackedFiles.map((filePath) => fs.readFileSync(filePath))).toEqual(before);
+        expect(fs.readdirSync(jobsDirectory)).toEqual(jobsBefore);
+        expect(fs.readFileSync(watermarkPath, 'utf8')).toBe(corruptWatermark);
+    });
+
+    it('refuses writes while a persisted job file is corrupt and never rewrites it', async () => {
+        const tempRoot = createTempDataRoot();
+        await writeSiteSettingsToDisk(DEFAULT_SITE_SETTINGS);
+        const jobsDirectory = path.join(tempRoot, 'workflow', 'jobs');
+        const corruptJobPath = path.join(jobsDirectory, 'corrupt-orphan-job.json');
+        const corruptJobBytes = '{ not-a-job-record';
+        writeText(corruptJobPath, corruptJobBytes);
+
+        const settingsPath = path.join(tempRoot, 'settings', 'site.json');
+        const manifestPath = path.join(tempRoot, 'manifest.json');
+        const jobsBefore = fs.readdirSync(jobsDirectory);
+
+        await expect(writeSiteSettingsToDisk({ ...DEFAULT_SITE_SETTINGS, siteName: 'Changed Name' }))
+            .rejects.toBeInstanceOf(BackupStateInvalidError);
+
+        expect(fs.readFileSync(settingsPath, 'utf8')).toBe(JSON.stringify(DEFAULT_SITE_SETTINGS, null, 2));
+        expect(fs.readFileSync(corruptJobPath, 'utf8')).toBe(corruptJobBytes);
+        expect(fs.readdirSync(jobsDirectory)).toEqual(jobsBefore);
+        expect(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).resources.settings).toBeDefined();
+    });
+
+    it('refuses restore before replacing data when the backup watermark is corrupt', async () => {
+        const tempRoot = createTempDataRoot();
+        const originalArticles = [createArticle('article-1', 'Original Article')];
+        await writeArticlesToDisk(originalArticles);
+        const articlesPath = path.join(tempRoot, 'articles', 'articles.json');
+        const before = fs.readFileSync(articlesPath);
+        const watermarkPath = path.join(tempRoot, 'workflow', 'backup-state.json');
+        const corruptWatermark = 'not json at all';
+        writeText(watermarkPath, corruptWatermark);
+
+        await expect(restoreEditorDataRootAtomically({
+            articles: [createArticle('article-2', 'Replacement Article')],
+            navigation: [],
+            settings: DEFAULT_SITE_SETTINGS,
+        })).rejects.toBeInstanceOf(BackupStateInvalidError);
+
+        expect(fs.readFileSync(articlesPath)).toEqual(before);
+        expect(fs.readFileSync(watermarkPath, 'utf8')).toBe(corruptWatermark);
+        expect(fs.existsSync(path.join(tempRoot, '.restore-state.json'))).toBe(false);
+        expect(fs.readdirSync(tempRoot).filter((name) => name.startsWith('.restore-'))).toEqual([]);
     });
 });

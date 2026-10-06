@@ -76,6 +76,51 @@ describe('article quality checks', () => {
     }));
   });
 
+  it('ignores heading-like lines inside fenced and indented code blocks', () => {
+    const content = '```bash\n# 安装依赖\nnpm install\n```\n\n    # indented code\n\n## Real Section';
+    const headings = getMarkdownHeadings(content);
+
+    expect(headings.map((heading) => `${heading.level}:${heading.text}`)).toEqual(['2:Real Section']);
+    expect(headings[0]?.id).toBe('Real%20Section');
+    // The anchor offset must be the line start used by MarkdownContent for id lookup.
+    expect(headings[0]?.index).toBe(content.indexOf('## Real Section'));
+  });
+
+  it('parses setext headings like the markdown renderer', () => {
+    const headings = getMarkdownHeadings('Setext Title\n=====\n\nSub Section\n-----');
+
+    expect(headings.map((heading) => `${heading.level}:${heading.text}:${heading.id}`)).toEqual([
+      '1:Setext Title:Setext%20Title',
+      '2:Sub Section:Sub%20Section',
+    ]);
+    expect(isFirstMarkdownH1DuplicateTitle('Setext Title\n=====\n\nSub Section', 'Setext Title')).toBe(true);
+  });
+
+  it('anchors the duplicate-title check on the rendered first heading', () => {
+    const content = '```bash\n# 安装依赖\n```\n\n# 安装依赖\n\n## S';
+    const headings = getMarkdownHeadings(content);
+
+    expect(headings.map((heading) => heading.level)).toEqual([1, 2]);
+    expect(headings[0]?.index).toBe(content.lastIndexOf('# 安装依赖'));
+    expect(isFirstMarkdownH1DuplicateTitle(content, '安装依赖')).toBe(true);
+  });
+
+  it('does not count fenced code lines as sections or extra H1s', () => {
+    const checks = getArticleQualityChecks({
+      title: 'Notes',
+      date: '2026-05-25',
+      description: '这是一段足够长的说明，用来验证围栏代码块不会影响章节与标题计数。',
+      tags: ['notes'],
+      content: '```bash\n# 步骤一\n# 步骤二\n```\n\n## 正文',
+      kind: 'deep-dive',
+      status: 'published',
+      category: '工程实践',
+    });
+
+    expect(checks).toContainEqual(expect.objectContaining({ id: 'h1-limit', passed: true }));
+    expect(hasRequiredSection(getMarkdownHeadings('```bash\n## 参考资料\necho hi\n```'), '参考资料')).toBe(false);
+  });
+
   it('keeps duplicate heading ids unique and stable', () => {
     const headings = getMarkdownHeadings([
       '## Review',

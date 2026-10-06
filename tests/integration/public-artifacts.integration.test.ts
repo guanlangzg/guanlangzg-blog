@@ -8,10 +8,61 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PublicSiteSnapshot } from '@/public-site/types';
 import { servePreviewArtifact } from '@/lib/public-build/preview';
 import { matchesPublicSearchDocument } from '@/public-site/search-index';
+import { computeCandidateDigest } from '@/lib/publishing/snapshot';
+import { fromReleaseSnapshot } from '@/lib/public-build/from-release';
+import type { SiteSnapshot } from '@/lib/publishing/types';
+import { DEFAULT_SITE_SETTINGS } from '@/lib/site-settings';
+
+function toCandidateSnapshot(publicSnapshot: PublicSiteSnapshot): SiteSnapshot {
+    return {
+        schemaVersion: 1,
+        siteId: 'integration-site',
+        articles: publicSnapshot.posts.map((post, index) => ({
+            id: `article-${index}`,
+            slug: post.slug,
+            title: post.title,
+            date: post.date,
+            description: post.description,
+            tags: post.tags,
+            content: post.content,
+            createdAt: 1,
+            updatedAt: 1,
+            ...(post.managedImage ? { managedImage: post.managedImage } : {}),
+        })),
+        navigation: publicSnapshot.navigation.map((group) => ({
+            name: group.name, icon: 'link', slug: group.name,
+            tools: group.items.map((item) => ({ icon: 'link', ...item })),
+        })),
+        settings: { ...DEFAULT_SITE_SETTINGS, siteName: publicSnapshot.site.title, siteDescription: publicSnapshot.site.description },
+        media: [], redirects: publicSnapshot.redirects ?? [], removedPaths: publicSnapshot.removedPaths ?? [],
+    };
+}
+
+function identityForPublicSnapshot(publicSnapshot: PublicSiteSnapshot) {
+    const candidate = toCandidateSnapshot(publicSnapshot);
+    const projected = fromReleaseSnapshot(publicSnapshot.releaseId, candidate);
+    const snapshotBytes = Buffer.from(JSON.stringify(publicSnapshot));
+    return {
+        candidateDigest: computeCandidateDigest(candidate),
+        snapshotDigest: createHash('sha256').update(snapshotBytes).digest('hex'),
+        candidateSnapshot: candidate,
+        projected,
+    };
+}
+
+function identityDocument(identity: ReturnType<typeof identityForPublicSnapshot>, releaseIdValue: string) {
+    return {
+        schemaVersion: 1,
+        releaseId: releaseIdValue,
+        candidateDigest: identity.candidateDigest,
+        snapshotDigest: identity.snapshotDigest,
+    };
+}
 
 const workspaceRoot = process.cwd();
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'g01-public-artifacts-'));
 const snapshotPath = path.join(temporaryRoot, 'frozen-candidate.json');
+const identityPath = path.join(temporaryRoot, 'candidate-identity.json');
 const artifactRoot = path.join(temporaryRoot, 'artifacts');
 const releaseId = 'g01-integration-release';
 
@@ -30,7 +81,8 @@ const snapshot: PublicSiteSnapshot = {
         slug: '无封面文章',
         title: '无封面的分享标题',
         description: '封面缺省时也生成分享图。',
-        date: '2026-09-29',
+        // A frozen post may carry a date the editor never validated: feeds must not invent one.
+        date: 'TBD',
         tags: ['分享'],
         content: '一篇没有封面的文章。',
     }],
@@ -39,9 +91,10 @@ const snapshot: PublicSiteSnapshot = {
         items: [{ title: '冻结导航项', description: '用于搜索的导航描述', url: 'https://example.com/tools', tags: ['工具'] }],
     }],
     redirects: [{ from: '/posts/旧文章/', to: '/posts/静态文章/?x=1&y="> <script>alert(1)</script>' }],
-    removedPaths: ['/blog/legacy-post/'],
+    removedPaths: ['/blog/legacy-post/', '/posts/withdrawn-post/'],
 };
 
+// Only the rejection cases call this helper without the real identity digests.
 function runBuild(args = ['--snapshot', snapshotPath, '--out', artifactRoot]) {
     return spawnSync(process.execPath, [
         path.join(workspaceRoot, 'scripts/public-site/build.mjs'),
@@ -80,6 +133,8 @@ beforeAll(async () => {
     await sharp({ create: { width: 1, height: 1, channels: 4, background: '#c66' } }).png().toFile(path.join(temporaryRoot, 'media', 'article.png'));
     await fs.writeFile(path.join(temporaryRoot, 'must-not-be-read', 'draft.json'), '{"title":"draft-secret","content":"private draft-secret body"}', 'utf8');
     await fs.writeFile(snapshotPath, JSON.stringify(snapshot), 'utf8');
+    const generatedIdentity = identityForPublicSnapshot(snapshot);
+    await fs.writeFile(identityPath, JSON.stringify(identityDocument(generatedIdentity, releaseId)), 'utf8');
     beforeBuildHashes = new Map<string, string>(await Promise.all([
         'src/app/page.tsx',
         'next.config.mjs',
@@ -89,7 +144,26 @@ beforeAll(async () => {
         relative,
         createHash('sha256').update(await fs.readFile(path.join(workspaceRoot, relative))).digest('hex'),
     ])));
-    buildResult = runBuild();
+    const identityValues = JSON.parse(await fs.readFile(identityPath, 'utf8')) as { candidateDigest: string; snapshotDigest: string };
+    const digestArgs = ['--identity', identityPath, '--candidate-digest', identityValues.candidateDigest, '--snapshot-digest', identityValues.snapshotDigest];
+    const built = spawnSync(process.execPath, [
+        path.join(workspaceRoot, 'scripts/public-site/build.mjs'),
+        '--snapshot', snapshotPath,
+        '--out', artifactRoot,
+        ...digestArgs,
+    ], {
+        cwd: workspaceRoot,
+        encoding: 'utf8',
+        env: {
+            ...process.env,
+            BLOG_DATA_ROOT: path.join(temporaryRoot, 'must-not-be-read'),
+            NODE_ENV: 'production',
+            NEXT_TELEMETRY_DISABLED: '1',
+        },
+        timeout: 600_000,
+        maxBuffer: 16 * 1024 * 1024,
+    });
+    buildResult = built;
     artifactPath = path.join(artifactRoot, releaseId, 'app', 'out');
 }, 600_000);
 
@@ -127,6 +201,7 @@ describe('isolated Next.js public artifact export', () => {
             `_site/${releaseId}/og/静态文章.png`,
             `_site/${releaseId}/og/无封面文章.png`,
             'blog/legacy-post/index.html',
+            'posts/withdrawn-post/index.html',
             'posts/旧文章/index.html',
             'search-index.json',
             `_site/${releaseId}/media/article.png`,
@@ -161,10 +236,99 @@ describe('isolated Next.js public artifact export', () => {
         expect(postEntry).toContain('<lastmod>2026-09-30</lastmod>');
     });
 
-    it('renders removed legacy paths while preserving the current blog archive', async () => {
+    it('seals the artifact with the candidate identity of the frozen projection', async () => {
+        expect(buildResult.status, buildResult.stderr || buildResult.stdout).toBe(0);
+        const identity = identityForPublicSnapshot(snapshot);
+        const document = JSON.parse(await fs.readFile(identityPath, 'utf8')) as Record<string, unknown>;
+        const frozenDigest = createHash('sha256').update(await fs.readFile(snapshotPath)).digest('hex');
+        const manifest = JSON.parse(await fs.readFile(path.join(artifactRoot, releaseId, 'artifacts.json'), 'utf8')) as {
+            candidateDigest: string;
+        };
+        const marker = JSON.parse(await fs.readFile(path.join(artifactPath, '_release.json'), 'utf8')) as {
+            releaseId: string;
+            candidateDigest: string;
+            snapshotDigest: string;
+        };
+
+        // The candidate digest describes the SiteSnapshot, never the projected frozen bytes.
+        expect(identity.snapshotDigest).toBe(frozenDigest);
+        expect(identity.candidateDigest).not.toBe(frozenDigest);
+        expect(document).toEqual(identityDocument(identity, releaseId));
+        expect(marker).toMatchObject({
+            releaseId,
+            candidateDigest: identity.candidateDigest,
+            snapshotDigest: frozenDigest,
+        });
+        expect(manifest.candidateDigest).toBe(identity.candidateDigest);
+    });
+
+    it('rejects a frozen input whose identity does not match the digests it is built with', async () => {
+        const identity = identityForPublicSnapshot(snapshot);
+        const directory = await fs.mkdtemp(path.join(temporaryRoot, 'identity-rejection-'));
+        const rejectedSnapshot = path.join(directory, 'frozen-candidate.json');
+        const rejectedIdentity = path.join(directory, 'candidate-identity.json');
+        const rejectedOutput = path.join(directory, 'artifacts');
+        const frozenBytes = JSON.stringify(snapshot);
+        await fs.writeFile(rejectedSnapshot, frozenBytes, 'utf8');
+        const buildWith = (candidateDigest: string, snapshotDigest: string) => runBuild([
+            '--snapshot', rejectedSnapshot,
+            '--identity', rejectedIdentity,
+            '--out', rejectedOutput,
+            '--candidate-digest', candidateDigest,
+            '--snapshot-digest', snapshotDigest,
+        ]);
+        const expectRejected = async (result: ReturnType<typeof runBuild>, message: RegExp) => {
+            expect(result.status, result.stdout).not.toBe(0);
+            expect(result.stderr).toMatch(message);
+            expect(await fs.access(rejectedOutput).then(() => true, () => false)).toBe(false);
+        };
+
+        await fs.writeFile(rejectedIdentity, JSON.stringify({
+            ...identityDocument(identity, releaseId),
+            candidateDigest: 'f'.repeat(64),
+        }), 'utf8');
+        await expectRejected(
+            buildWith(identity.candidateDigest, identity.snapshotDigest),
+            /Candidate digest does not match the frozen candidate identity/,
+        );
+
+        await fs.writeFile(rejectedIdentity, JSON.stringify({
+            ...identityDocument(identity, releaseId),
+            snapshotDigest: 'e'.repeat(64),
+        }), 'utf8');
+        await expectRejected(
+            buildWith(identity.candidateDigest, identity.snapshotDigest),
+            /Frozen snapshot digest does not match the candidate identity/,
+        );
+
+        await fs.writeFile(rejectedIdentity, JSON.stringify(identityDocument(identity, releaseId)), 'utf8');
+        await fs.writeFile(rejectedSnapshot, JSON.stringify({ ...snapshot, site: { ...snapshot.site, title: '篡改后的标题' } }), 'utf8');
+        await expectRejected(
+            buildWith(identity.candidateDigest, identity.snapshotDigest),
+            /Frozen snapshot bytes do not match their parent identity/,
+        );
+    });
+
+    it('emits no invented publication dates for a frozen post without a valid date', async () => {
+        expect(buildResult.status, buildResult.stderr || buildResult.stdout).toBe(0);
+        const feed = await fs.readFile(path.join(artifactPath, 'feed.xml'), 'utf8');
+        const sitemap = await fs.readFile(path.join(artifactPath, 'sitemap.xml'), 'utf8');
+        const feedItem = feed.split('<item>').find((entry) => entry.includes('无封面的分享标题'));
+        const sitemapEntry = sitemap.split('<url>').find((entry) => entry.includes('/posts/%E6%97%A0%E5%B0%81%E9%9D%A2%E6%96%87%E7%AB%A0/'));
+
+        expect(feed).not.toContain('Invalid Date');
+        expect(feedItem).toBeTruthy();
+        expect(feedItem).not.toContain('<pubDate>');
+        expect(sitemapEntry).toBeTruthy();
+        expect(sitemapEntry).not.toContain('<lastmod>');
+    });
+
+    it('renders removed legacy and current article paths while preserving the archive', async () => {
         const removed = await fs.readFile(path.join(artifactPath, 'blog', 'legacy-post', 'index.html'), 'utf8');
+        const withdrawn = await fs.readFile(path.join(artifactPath, 'posts', 'withdrawn-post', 'index.html'), 'utf8');
         const archive = await fs.readFile(path.join(artifactPath, 'blog', 'index.html'), 'utf8');
         expect(removed).toContain('内容已移除');
+        expect(withdrawn).toContain('内容已移除');
         expect(removed).toContain('href="/"');
         expect(removed).toContain('href="/search/"');
         expect(archive).toContain('冻结文章标题');

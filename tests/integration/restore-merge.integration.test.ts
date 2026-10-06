@@ -4,10 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Article } from '@/app/types/article';
+import type { Category } from '@/app/types/navigation';
 import { createArticleSlug } from '@/lib/article-data';
 import { readArticlesFromDisk, readNavigationFromDisk, readSiteSettingsFromDisk } from '@/lib/editor-data-storage';
 import { readEditorMediaManifest } from '@/lib/editor-media-storage';
 import { listJobs } from '@/lib/jobs/store';
+import { createNavigationIdentityMap } from '@/lib/navigation-identities';
 import { createRestorePlan, type RestorableEditorData } from '@/lib/restoring/plan';
 import {
   applyRestorePlan,
@@ -72,6 +74,14 @@ function data(input: Omit<Partial<RestorableEditorData>, 'settings'> & { setting
   };
 }
 
+function navigationTool(title: string, url: string): Category['tools'][number] {
+  return { icon: 'T', title, description: title, url, tags: ['reference'] };
+}
+
+function navigationCategory(tools: Category['tools']): Category[] {
+  return [{ name: 'Resources', icon: 'R', slug: 'resources', tools }];
+}
+
 function depsFor(input: {
   current: RestorableEditorData;
   backup: RestorableEditorData;
@@ -116,6 +126,41 @@ async function apply(input: {
   }));
   const result = await applyRestorePlan(plan, resolvedChoices, dependencies);
   return { result, plan, dependencies, backupCommit };
+}
+
+const SHARED_MEDIA_PATH = 'files/2026/06/shared.png';
+
+/** Restores a backup article against the same media path with different bytes, keeping the current bytes. */
+async function applySharedMediaRestore(backupContent: string): Promise<{ content: string; movedPath: string }> {
+  const sharedCurrent = mediaAsset(PNG_ONE, SHARED_MEDIA_PATH);
+  const sharedBackup = mediaAsset(PNG_TWO, SHARED_MEDIA_PATH);
+  const current = data({
+    articles: [article('current-link', `![current](/media/${SHARED_MEDIA_PATH})`)],
+    media: {
+      manifest: { version: 1, updatedAt: '2026-06-01T00:00:00.000Z', assets: [sharedCurrent] },
+      files: [{ path: SHARED_MEDIA_PATH, bytes: PNG_ONE }],
+    },
+  });
+  const backup = data({
+    articles: [article('backup-link', backupContent)],
+    media: {
+      manifest: { version: 1, updatedAt: '2026-06-02T00:00:00.000Z', assets: [sharedBackup] },
+      files: [{ path: SHARED_MEDIA_PATH, bytes: PNG_TWO }],
+    },
+  });
+  const plan = createRestorePlan(current, backup, {
+    currentRevision: 'revision-1',
+    backupCommit: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+  });
+  const mediaConflict = plan.conflicts.find((item) => item.kind === 'media-path')!;
+  const result = await apply({
+    current,
+    backup,
+    choices: [{ conflictId: mediaConflict.conflictId, resolution: 'keep-current' }],
+  });
+  const restored = result.result.data.articles.find((item) => item.id === 'backup-link');
+
+  return { content: restored?.content ?? '', movedPath: `files/restored/${sharedBackup.hash}.png` };
 }
 
 afterEach(() => {
@@ -275,6 +320,176 @@ describe('restore merge application', () => {
 
     const restored = result.result.data.articles.find((item) => item.id === 'wrapped');
     expect(restored?.content).toBe(`[![cover](${mediaUrl.replace(sharedPath, movedPath)})](${mediaUrl.replace(sharedPath, movedPath)})`);
+  });
+
+  it('rewrites link titles that contain "]( without touching the title text', async () => {
+    const restored = await applySharedMediaRestore(
+      '[label](/media/files/2026/06/shared.png "see ]( here")'
+    );
+
+    expect(restored.content).toBe(
+      `[label](/media/${restored.movedPath} "see ]( here")`
+    );
+  });
+
+  it('rewrites reference-definition media targets', async () => {
+    const restored = await applySharedMediaRestore(
+      '![cover][ref]\n\n[ref]: /media/files/2026/06/shared.png'
+    );
+
+    expect(restored.content).toBe(
+      `![cover][ref]\n\n[ref]: /media/${restored.movedPath}`
+    );
+  });
+
+  it('rejects raw HTML media references it cannot rewrite exactly', async () => {
+    await expect(applySharedMediaRestore(
+      '<img src="/media/files/2026/06/shared.png" alt="cover">'
+    )).rejects.toMatchObject({
+      status: 422,
+      code: 'INVALID_BACKUP',
+      message: expect.stringContaining('files/2026/06/shared.png'),
+    });
+  });
+
+  it('applies per-tool navigation choices instead of ignoring them', async () => {
+    const urlA = 'https://a.example.com/';
+    const urlB = 'https://b.example.com/';
+    const currentNav = navigationCategory([
+      navigationTool('A1', urlA),
+      navigationTool('A2', urlA),
+      navigationTool('B1', urlB),
+      navigationTool('B2', urlB),
+    ]);
+    const backupNav = navigationCategory([
+      navigationTool('A-backup', urlA),
+      navigationTool('B-backup', urlB),
+    ]);
+    const current = data({ navigation: currentNav, navigationIdentities: createNavigationIdentityMap(currentNav) });
+    const backup = data({ navigation: backupNav, navigationIdentities: null });
+    const plan = createRestorePlan(current, backup, {
+      currentRevision: 'revision-1',
+      backupCommit: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const identity = plan.conflicts.find((item) => item.kind === 'navigation-identity' && item.subject.navigationIdentity)!;
+    const ambiguousA = plan.conflicts.find((item) => item.kind === 'navigation-ambiguous'
+      && item.subject.normalizedUrl === urlA)!;
+    const ambiguousB = plan.conflicts.find((item) => item.kind === 'navigation-ambiguous'
+      && item.subject.normalizedUrl === urlB)!;
+
+    const applied = await apply({ current, backup, choices: [
+      { conflictId: identity.conflictId, resolution: 'keep-current' },
+      { conflictId: ambiguousA.conflictId, resolution: 'use-backup' },
+      { conflictId: ambiguousB.conflictId, resolution: 'keep-current' },
+    ] });
+
+    expect(applied.result.data.navigation[0]?.tools.map((tool) => tool.title)).toEqual(['A-backup', 'B1', 'B2']);
+  });
+
+  it('keeps both tool versions and appends new backup tools', async () => {
+    const urlA = 'https://a.example.com/';
+    const currentNav = navigationCategory([
+      navigationTool('A1', urlA),
+      navigationTool('A2', urlA),
+      navigationTool('Keep', 'https://keep.example.com/'),
+    ]);
+    const backupNav = navigationCategory([
+      navigationTool('A-backup', urlA),
+      navigationTool('Added', 'https://added.example.com/'),
+    ]);
+    const current = data({ navigation: currentNav, navigationIdentities: createNavigationIdentityMap(currentNav) });
+    const backup = data({ navigation: backupNav, navigationIdentities: null });
+    const plan = createRestorePlan(current, backup, {
+      currentRevision: 'revision-1',
+      backupCommit: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const identity = plan.conflicts.find((item) => item.kind === 'navigation-identity' && item.subject.navigationIdentity)!;
+    const ambiguousA = plan.conflicts.find((item) => item.kind === 'navigation-ambiguous')!;
+
+    const applied = await apply({ current, backup, choices: [
+      { conflictId: identity.conflictId, resolution: 'keep-current' },
+      { conflictId: ambiguousA.conflictId, resolution: 'keep-both' },
+    ] });
+
+    expect(applied.result.data.navigation[0]?.tools.map((tool) => tool.title)).toEqual([
+      'A1',
+      'A2',
+      'A-backup',
+      'Keep',
+      'Added',
+    ]);
+  });
+
+  it('takes the backup category version and still honours per-tool choices', async () => {
+    const urlA = 'https://a.example.com/';
+    const currentNav = navigationCategory([navigationTool('A1', urlA)]);
+    const backupNav = [{ name: 'Resources (backup)', icon: 'B', slug: 'resources', tools: [navigationTool('A-backup', urlA)] }];
+    const current = data({ navigation: currentNav, navigationIdentities: createNavigationIdentityMap(currentNav) });
+    const backup = data({ navigation: backupNav, navigationIdentities: null });
+    const plan = createRestorePlan(current, backup, {
+      currentRevision: 'revision-1',
+      backupCommit: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const identity = plan.conflicts.find((item) => item.kind === 'navigation-identity' && item.subject.navigationIdentity)!;
+    const toolConflict = plan.conflicts.find((item) => item.subject.normalizedUrl === urlA)!;
+
+    const applied = await apply({ current, backup, choices: [
+      { conflictId: identity.conflictId, resolution: 'use-backup' },
+      { conflictId: toolConflict.conflictId, resolution: 'keep-current' },
+    ] });
+
+    expect(applied.result.data.navigation[0]?.name).toBe('Resources (backup)');
+    expect(applied.result.data.navigation[0]?.tools.map((tool) => tool.title)).toEqual(['A1']);
+  });
+
+  it('keeps both category versions under a non-conflicting slug', async () => {
+    const urlA = 'https://a.example.com/';
+    const currentNav = navigationCategory([navigationTool('A1', urlA)]);
+    const backupNav = navigationCategory([navigationTool('A-backup', urlA)]);
+    const current = data({ navigation: currentNav, navigationIdentities: createNavigationIdentityMap(currentNav) });
+    const backup = data({ navigation: backupNav, navigationIdentities: null });
+    const plan = createRestorePlan(current, backup, {
+      currentRevision: 'revision-1',
+      backupCommit: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const identity = plan.conflicts.find((item) => item.kind === 'navigation-identity' && item.subject.navigationIdentity)!;
+    const toolConflict = plan.conflicts.find((item) => item.subject.normalizedUrl === urlA)!;
+
+    const applied = await apply({ current, backup, choices: [
+      { conflictId: identity.conflictId, resolution: 'keep-both' },
+      { conflictId: toolConflict.conflictId, resolution: 'keep-current' },
+    ] });
+    const slugs = applied.result.data.navigation.map((item) => item.slug);
+
+    expect(slugs[0]).toBe('resources');
+    expect(slugs[1]).toMatch(/^resources-restore-/);
+    expect(applied.result.data.navigation[1]?.tools.map((tool) => tool.title)).toEqual(['A-backup']);
+  });
+
+  it('rejects an internally inconsistent backup before staging anything', async () => {
+    const current = data({ articles: [article('current', 'current')] });
+    const backup = data({
+      articles: [
+        { ...article('legacy-a', 'first'), slug: 'duplicate' },
+        { ...article('legacy-b', 'second'), slug: 'duplicate' },
+      ],
+    });
+    const plan = createRestorePlan(current, backup, {
+      currentRevision: 'revision-1',
+      backupCommit: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    });
+    const dependencies = depsFor({ current, backup });
+    const stage = vi.spyOn(dependencies, 'stage');
+    const choices = plan.conflicts.map((conflict) => ({
+      conflictId: conflict.conflictId,
+      resolution: 'keep-both' as const,
+    }));
+
+    await expect(applyRestorePlan(plan, choices, dependencies)).rejects.toMatchObject({
+      status: 422,
+      code: 'INVALID_BACKUP',
+    });
+    expect(stage).not.toHaveBeenCalled();
   });
 
   it('returns 409 after a local revision change without applying data', async () => {

@@ -158,3 +158,60 @@
 ## 环境备忘
 
 - 本会话并行派发子代理审查时，同时 5 个会有 3 个报 `user concurrency limit exceeded`，2-3 个并发可稳定运行；重试即可补齐。
+
+## 本机检查命令与工作流沙箱（2026-10-05）
+
+- **静态检查可直接跑，不必经 npm 脚本**（本机 `npm run check` 含 5 项：check:env、lint、typecheck、test:run、deadcode；本机实测全部退出码 0）：
+  - `node scripts/test/check-env-files.mjs`（依赖 git 索引）
+  - `node ./node_modules/eslint/bin/eslint.js src tests eslint.config.mjs next.config.mjs postcss.config.mjs tailwind.config.ts`
+  - `node ./node_modules/typescript/bin/tsc --noEmit --incremental false --pretty false`
+  - `node ./node_modules/knip/bin/knip.js`
+  - `node ./node_modules/vitest/vitest.mjs run --maxWorkers=2`
+- **CI 还有第 6 项检查不在 `npm run check` 里**：`python -m unittest discover -s scripts/test -p "test_*.py"`（本机 Python 3.11.9，11 项通过，约 2 秒）。`npm run check` 通过 **不代表** CI 会过。
+- **全量 Vitest 实测约 439 秒、输出约 84KB**（117 文件 / 920 项通过）。84KB 远低于动态工作流 `world.run` 的每流 256KB 拒绝阈值，可安全在 `world.run` 里执行。
+- **动态工作流（CreateWorkflow）在本机的两个硬限制**：
+  - `world.run` **无法 spawn `npm`**（`npm.cmd` 在 cmd 解析下 ENOENT，直接命令名与 `npm.cmd` 都失败）；改用上面的 `node <node_modules 内 CLI 路径>` 直连形式。
+  - `Date.now()` 与 `Math.random()` 在工作流脚本里被编译期禁用，脚本内无法自行计时。
+- **工作流 amend 的缓存代价（本机实测结论）**：脚本里只要有 `world.run` 真实执行过且子代理读过文件，amend 后这些 ask 会全部重跑 —— 一次开了静态检查的 15 维度审查，跑 17 分钟、约 735 万 token 后 amend，等于把这 17 分钟全部重付，新运行还要再跑约 42 分钟。**不要在长运行中途为"调整阶段顺序"做 amend**；顺序问题留到下一次新提交或运行结束后处理。
+- **长测试排期结论**：全量 Vitest 本就该放在审查/开发流程之后，作为最后的确定性确认；报告与发现应逐条 `report()` 实时上报，使长测试失败或超时也不会丢失已完成的审查结果。
+- **工作流脚本设计缺陷（本次已犯，勿再犯）**：复核结果的 `verdict: confirmed | refuted | unclear` 三值若在映射 `status` 时把 `refuted` 与 `unclear` 合并成同一个 `unconfirmed`，报告会把"被证伪"和"判不了"混为一谈，读者无法区分。**三值应映射成三个不同标签**（例如 verified / refuted / unclear），或至少在输出文本里保留原始 verdict 字样。
+- **审查报告归档约定**：`docs/` 现有分类为 `开发/`（产品与实施文档）与 `superpowers/plans/`（实施计划）。代码审查报告属独立类别，放入 `docs/审查/`，文件名 `<日期>-<主题>.md`（本机已建 `docs/审查/2026-10-05-全项目多维度代码审查报告.md`）。工作流 `artifact.markdown` 只发到仓库外的 ZCode artifacts 存储，**不会落进仓库**；需要留在仓库的产物必须显式复制进 `docs/`。
+
+## 日期解析与静态产物日期契约（2026-10-06）
+
+- 动 RSS/sitemap 日期逻辑前注意 Node（本机 v24.12.0）`Date` 解析的两处宽松行为，不能用 `Date.parse`/`Number.isNaN` 当合法性判据：① 非日期-only 字符串按本地时区解释——`new Date('2026-09-30 12:00:00')` 在 `TZ=UTC` 得 `2026-09-30T12:00:00.000Z`，在 `TZ=America/Los_Angeles` 得 `2026-09-30T19:00:00.000Z`；② 形似 ISO 但日历无效的值被静默归一且不抛错——`new Date('2026-02-31T00:00:00Z').toUTCString()` 为 `Tue, 03 Mar 2026 00:00:00 GMT`。
+- 复现探针（本轮实测）：`node -e 'for (const tz of ["UTC","America/Los_Angeles"]) { process.env.TZ = tz; console.log(tz, new Date("2026-09-30 12:00:00").toISOString(), new Date("2026-02-31T00:00:00Z").toUTCString()); }'`
+- 相关现状（本轮只读核对）：`src/public-site/app/sitemap.ts:13` 把 `post.date` 原样作为 `lastModified`（Next metadata 序列化不校验日历有效性）；`src/app/feed.xml/route.ts:22-30` 在解析失败时用 `new Date()` 当前时间兜底，该兜底对静态导出不确定、不可复用。RSS 与 sitemap 若要做日期兼容，应共用同一套严格日历校验并明确固定时区约定。
+
+## 2026-10-06 公开构建 CLI 与容器/死代码门禁（本轮实测）
+
+- 公开站构建 CLI 已强制候选/快照摘要绑定：`--snapshot`、`--out` 之外必须成对给出 `--candidate-digest` 与 `--snapshot-digest`（64 位十六进制），`--identity` 可省，缺省取快照同目录的 `candidate-identity.json`；未知/重复参数、缺值、路径含 `..` 都直接报错（`scripts/public-site/build.mjs:21-52`）。本机实测旧的两参数调用退出 1 并提示 `Candidate and frozen snapshot digests are required for a public build.`——本文件前面记录的 `--snapshot/--out` 两参数写法已失效。
+- 容器验收脚本 `scripts/test/verify-builder-container.mjs` 用 `RUNNER_IMAGE`（兼容 `BUILDER_IMAGE`）指定镜像、`RUNNER_SKIP_BUILD=1` 表示复用已加载镜像；无 Docker 时退出码 2 且明确"未验证"，不得当作通过（本机实测退出 2）。它自建一次性夹具（OS 临时目录的快照 + `candidate-identity.json`），不读写仓库内冻结夹具，并在容器内以非 root 断言产物含 `index.html`、`llms.txt`、`manifest.webmanifest`。
+- `.github/workflows/ci.yml` 现由 PR 与 push 都触发：check → 只读的 `runner-image`（buildx `load: true` 构建后设置 `RUNNER_IMAGE`/`RUNNER_SKIP_BUILD=1` 跑上面的脚本）；只有非 PR 的 `publish-image` 推送镜像，`packages: write` 只授予该作业。
+- `knip.jsonc` 有意保持 exports/types 规则关闭：本机实测 `node ./node_modules/knip/bin/knip.js --no-progress --exports --reporter compact` 退出 1，报告 25 项 unused exports 与 22 项 unused exported types（都在 `src/lib`）。开启该门禁必须与清理这些导出同批进行，否则 `npm run deadcode` 及 CI check 会直接失败。
+
+## 2026-10-06 首版发布验收链修复（本轮实测）
+
+- `npm run test:release` 现在每次用 `os.tmpdir()` + `mkdtemp` 新建独立夹具，只删除自己创建的目录；仓库内 `.tmp/first-release-fixture` 仅由单独的 `npm run test:release:fixture` CLI 维护（仍要求 `.fixture-marker.json` 的 marker），因此可以直接运行 `test:release` 而不会再覆盖既有夹具。
+- 夹具按**真实字节**写出 `candidate-identity.json`（`schemaVersion: 1`、`releaseId`、候选摘要、冻结快照摘要）；主构建与变异构建都必须显式传 `--identity` 和两个摘要，变异构建使用独立身份文件，并且要在真实构建成功之后才判断泄漏标记——否则会把"构建被拒"误报成"检出泄漏"。
+- 静态 `404.html` 回归：`scripts/public-site/build.mjs` 的隔离构建白名单必须包含 `src/public-site/app/not-found.tsx`，否则 Pages 上未知路径会退回 Next 默认 404；验收已加"`404.html` 必须是共享移除页"的断言。
+- CI 的只读 `runner-image` 作业现在在构建镜像前先跑 `npm run test:release`（此前 CI 不执行该验收，全绿也会掩盖其失败）。
+- 本机实测 `node scripts/test/verify-first-release.mjs` **26/26 通过，exit 0**；同一轮前后对既有夹具做内容指纹比对，确认字节未变。
+- 本仓库 React 为 18.3.1，`require('react').cache` 实测为 `undefined`（`cache` 是 React 19 才有的导出），公开读取的请求级一致性不能直接用 `React.cache` 实现。`src/lib/live-public-reader.ts` 的 2 秒复用窗口是刻意设计：跨请求最多 2 秒旧 release 仍可见，慢请求跨过窗口边界时理论上仍可能混版本。
+
+## 2026-10-06 审查修复轮验收与三个新修 bug（本轮实测）
+
+- **本轮改动规模**：`fix/review-2026-10-05-optimization` 相对 `main`（`efc9e0a`）有 90 个已跟踪文件改动（+5250/−738）与 14 个新文件，全部未提交时的工作树。运行方式：`node ./node_modules/vitest/vitest.mjs run --maxWorkers=2`（约 430 秒）；`npm run check` 的五项与 CI 第六项（`python -m unittest discover -s scripts/test -p "test_*.py"`，11 项）分别验证，`npm run check` 不代表 CI 会过。
+- **2026-10-05 审查报告的四条发布/备份断点，经复核均已真实修复**（非掩盖）：候选摘要在发布侧用 `computeCandidateDigest`、构建侧对冻结字节算 sha256，两者**本就不应相等**，改为用不透明身份文件 `candidate-identity.json` + 两个摘要参数各自绑定与自校验；`withdraw` 的 `/posts/<slug>/` 与快照校验只收 `/blog/<slug>/` 的冲突改为两侧都接受两种前缀，并在 `snapshot.ts` 新增 `resolvePathOwnership` 解决同路径双主；runner 阶段补齐 38 条源码闭包 COPY（含 `manifest.ts`、`llms.txt/route.ts`），容器验收脚本改为 `--target runner` 并接入 CI；GitHub 递归 tree 的目录项在 `src/lib/github/backup.ts:407` 按 `entry.type !== 'blob'` 跳过。
+- **本轮新修三个真实缺陷**（每个都先用临时回退证明"去掉修复则测试变红"，再恢复）：
+  - `NewArticleContent.tsx`：`createdArticleRef` 按 `draftKey` 记忆本次 URL 已建文章，但保存后路由只是 query 变化（`?edit=<id>`），组件实例不卸载、ref 不清除；浏览器后退回 `/editor/blog/new` 再保存第二篇会**整体覆盖已保存的第一篇**。修法：`useEffect(..., [articleKey])` 在路由键变化时清空 ref。
+  - `src/lib/publishing/service.ts:172`：`error.replace(/[\\r\\n]+/g, ' ')` 双重转义，实测把 `'Error: cannot resolve module'` 变成 `'E o : ca ot  esolve module'`（删除所有字母 r/n 与反斜杠，真实换行反而保留），构建失败原因写入 release 前已被破坏。修法：改用 `/[\r\n]+/g`。（仓库其余 `[\r\n]` 正则如 `github/client.ts:128` 写法正确，仅此一处出错。）
+  - `src/lib/markdown.ts` 的 `getLivePostFromSnapshot` 只按 `decoded[0]` 匹配且不检查段数，live 运行时下 `/posts/a/b` 会渲染 slug 为 `a` 的文章而非 404；非 live 路径（`getRuntimePostBySlugArray`）本就要求 `length === 1`。修法：同样加 `decoded.length !== 1` 提前返回 null。
+- **新增测试（回退修复即红）**：`tests/app/new-article-content.test.tsx` 的 `creates a new article when the editor returns to the blank new-article route`；`tests/lib/release-confirmation.test.ts` 的 `keeps the build failure message intact when collapsing line breaks`；`tests/lib/markdown-runtime.test.ts` 的 `does not serve a live article under a multi-segment slug URL`。
+- **`BackupStateInvalidError` 补 HTTP 映射**：本轮新增的 `assertBackupStateWritableUnderLock`（`src/lib/editor-data-storage.ts:983`/`:1370`）会在水位或任一 job 文件损坏时拒绝所有内容写入，但该错误此前无任何路由映射，编辑端会得到不可解释的 500。已加 `createEditorBackupStateInvalidResponse`（`src/lib/editor-api-auth.ts`，503 + `code: 'backup_state_invalid'`）并接入 articles/navigation/settings/backup/backup-current-manifest/media-gc 六处 catch，同时接入中央映射 `src/lib/editor-api-errors.ts`；回归测试见 `tests/app/editor-data-routes.test.ts` 的 `returns a structured 503 when backup bookkeeping is damaged`（临时禁用映射分支可复现该用例转红）。
+  - **媒体上传也必须过同一道守卫**（PR 上 Codex 审查指出，已采纳）：`writeEditorMediaManifest`（`src/lib/editor-media-storage.ts:190`）只写 manifest 并登记脏水位，原本不检查损坏状态，于是 job 文件损坏时 `POST /api/data/media` 仍会成功、内容在没有备份记账的情况下变化。已在同一锁内补 `assertBackupStateWritableUnderLock`（覆盖普通上传与恢复两条路径），并给上传路由接上 503 映射；回归测试见 `tests/app/media-route.test.ts` 的 `refuses uploads while backup bookkeeping is damaged`（注释掉守卫该用例即红）。判断"某种写入是否属于内容写入"时，看它是否调用 `recordContentMutationUnderLock`——调用者都应有守卫。
+- **本轮确认为"有意保留"而非缺陷的项目**（勿再当 bug 报）：`deferClaimedJob` 把 `attempt` 归零是等待型轮询语义，已被 `tests/lib/jobs-store.test.ts` 的用例正面钉住；`knip.jsonc` 保持 exports/types 关闭是记录在案的欠账（开启须与清理 25 exports + 22 types 同批）。
+- **本轮未覆盖**：Docker 容器内公开构建（本机无 Docker CLI，现由 CI 只读 `runner-image` 作业执行）、真实 GitHub/Pages/R2 链路、浏览器端 smoke；`/api/health` 与 Docker/回滚判据仍不看 jobs 健康（本轮只让 `/api/ready` 在持久化文件损坏时降级 503）。
+- **跨平台测试盲区（本轮 CI 实际抓到的失败，勿再重复）**：`tests/scripts/docker-entrypoint-permissions.test.ts` 的两个用例用 `spawnSync('sh', ...)` + 临时目录里的 `su-exec`/`chmod`/`chown` stub 模拟权限，但 `fs.writeFileSync` **不设置可执行位**——POSIX 的 PATH 搜索会跳过不可执行文件，于是调用落到真实 `chown` 上，Linux runner 没有 `nextjs` 用户即报 `chown: invalid user: 'nextjs:nodejs'`。Windows/MSYS 既不强制可执行位（实测未 chmod 的 stub 也能执行），这两条用例又被 `shellAvailable`（PATH 里没有 `sh`）整条 `it.runIf` 跳过，因此本机全量 127 文件全绿也完全看不到。修法：写 stub 后显式 `fs.chmodSync(stubPath, 0o755)`。**结论：凡依赖 `sh` 的测试在本机默认是跳过状态，不要拿本机全绿当作它们通过；这类用例只能靠 CI 验证。** 本机若要复现，需把 `D:\Program Files\Git\usr\bin` 加进 PATH（Git for Windows 自带 `sh.exe`，WSL 本机未安装发行版）。
+- **PR #2**（`fix/review-2026-10-05-optimization` → `main`）：提交 `557e30a`（114 文件）+ `3e969c6`（上一条 stub 可执行位修复）。
+

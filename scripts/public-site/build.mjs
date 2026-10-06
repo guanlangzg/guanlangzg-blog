@@ -12,6 +12,9 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const nextBin = path.join(projectRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
 const publicAssets = ['guanlan-logo.png', 'favicon-16.png', 'favicon-32.png', 'favicon-48.png', 'favicon-64.png'];
 const maxSnapshotBytes = 4 * 1024 * 1024;
+const maxIdentityBytes = 4 * 1024;
+const sha256Pattern = /^[a-f0-9]{64}$/i;
+const candidateIdentityFileName = 'candidate-identity.json';
 const SITE_ORIGIN = 'https://guanlangzg.github.io';
 const escapeHtml = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
@@ -19,18 +22,34 @@ function parseArguments(argv) {
     const values = new Map();
     for (let index = 0; index < argv.length; index += 1) {
         const key = argv[index];
-        if (key !== '--snapshot' && key !== '--out') throw new Error(`Unknown option: ${key}`);
+        if (!['--snapshot', '--out', '--identity', '--candidate-digest', '--snapshot-digest'].includes(key)) throw new Error(`Unknown option: ${key}`);
         if (values.has(key)) throw new Error(`Duplicate option: ${key}`);
         const value = argv[index + 1];
         if (!value || value.startsWith('--')) throw new Error(`Missing value for ${key}`);
-        if (value.split(/[\\/]/).includes('..')) throw new Error(`Path traversal is not allowed for ${key}`);
-        values.set(key, path.resolve(value));
+        if (key.endsWith('digest')) {
+            if (!sha256Pattern.test(value)) throw new Error(`Invalid digest for ${key}`);
+            values.set(key, value.toLowerCase());
+        } else {
+            if (value.split(/[\\/]/).includes('..')) throw new Error(`Path traversal is not allowed for ${key}`);
+            values.set(key, path.resolve(value));
+        }
         index += 1;
     }
     if (!values.has('--snapshot') || !values.has('--out')) {
-        throw new Error('Usage: node scripts/public-site/build.mjs --snapshot <frozen.json> --out <new-artifact-root>');
+        throw new Error(`Usage: node scripts/public-site/build.mjs --snapshot <frozen.json> --out <new-artifact-root> --candidate-digest <sha256> --snapshot-digest <sha256> [--identity <candidate-identity.json>]`);
     }
-    return { snapshotPath: values.get('--snapshot'), outputRoot: values.get('--out') };
+    if (values.has('--candidate-digest') !== values.has('--snapshot-digest')) {
+        throw new Error('Candidate and frozen snapshot digests must be provided together.');
+    }
+    if (!values.has('--candidate-digest')) throw new Error('Candidate and frozen snapshot digests are required for a public build.');
+    const snapshotPath = values.get('--snapshot');
+    return {
+        snapshotPath,
+        outputRoot: values.get('--out'),
+        candidateDigest: values.get('--candidate-digest'),
+        snapshotDigest: values.get('--snapshot-digest'),
+        identityPath: values.has('--identity') ? values.get('--identity') : path.join(path.dirname(snapshotPath), candidateIdentityFileName),
+    };
 }
 
 function buildEnvironment(snapshotPath, releaseId) {
@@ -90,6 +109,38 @@ function rewriteManagedMarkdown(content, sourcePath, targetPath) {
 async function assertRegularFile(filePath, label) {
     const info = await fs.lstat(filePath);
     if (!info.isFile() || info.isSymbolicLink()) throw new Error(`${label} must be a regular file`);
+}
+
+/**
+ * The frozen public projection is not the candidate itself, so a caller cannot recompute the
+ * candidate digest from it: the release-owned identity document travels next to the frozen
+ * bytes and must agree with them and with the digests passed on the command line.
+ */
+async function assertCandidateIdentity(identityPath, expected) {
+    if (await fs.access(identityPath).then(() => false, () => true)) {
+        throw new Error(`Candidate identity is missing; a public build needs the identity written next to the frozen snapshot: ${identityPath}`);
+    }
+    await assertRegularFile(identityPath, 'candidate identity');
+    const info = await fs.stat(identityPath);
+    if (info.size > maxIdentityBytes) throw new Error('Candidate identity exceeds 4 KiB');
+    let identity;
+    try {
+        identity = JSON.parse(await fs.readFile(identityPath, 'utf8'));
+    } catch {
+        throw new Error('Candidate identity is not valid JSON');
+    }
+    if (!identity || typeof identity !== 'object' || Array.isArray(identity)) throw new Error('Candidate identity must be an object');
+    if (identity.schemaVersion !== 1) throw new Error('Candidate identity has an unsupported schema version');
+    if (identity.releaseId !== expected.releaseId) throw new Error('Candidate identity release does not match the frozen snapshot');
+    if (typeof identity.candidateDigest !== 'string' || !sha256Pattern.test(identity.candidateDigest)) {
+        throw new Error('Candidate identity digest is invalid');
+    }
+    if (identity.candidateDigest.toLowerCase() !== expected.candidateDigest) {
+        throw new Error('Candidate digest does not match the frozen candidate identity');
+    }
+    if (identity.snapshotDigest !== expected.snapshotDigest) {
+        throw new Error('Frozen snapshot digest does not match the candidate identity');
+    }
 }
 
 async function assertNewOutputDirectory(outputRoot) {
@@ -224,12 +275,14 @@ function publicOutputPath(root, route) {
 
 async function writeRemovedPages(outputRoot, removedPaths) {
     for (const route of removedPaths ?? []) {
-        if (!route.toLowerCase().startsWith('/blog/')) continue;
+        const isBlogPath = route.toLowerCase().startsWith('/blog/');
+        const isPostPath = route.toLowerCase().startsWith('/posts/');
+        if (!isBlogPath && !isPostPath) continue;
         const filePath = publicOutputPath(outputRoot, route);
-        await assertRegularFile(filePath, `removed legacy page ${route}`);
+        await assertRegularFile(filePath, `removed page ${route}`);
         const html = await fs.readFile(filePath, 'utf8');
         if (!html.includes('内容已移除') || !html.includes('href="/"') || !html.includes('href="/search/"')) {
-            throw new Error(`Removed legacy page is missing its shared removal view: ${route}`);
+            throw new Error(`Removed page is missing its shared removal view: ${route}`);
         }
     }
 }
@@ -296,6 +349,7 @@ async function createBuildWorkspace(buildRoot, snapshot) {
     // reject the empty dynamic route, so the route is only copied when needed.
     const hasRemovedBlogPaths = (snapshot.removedPaths ?? [])
         .some((route) => String(route).toLowerCase().startsWith('/blog/'));
+
     const sourceFiles = [
         ['src/public-site/app/layout.tsx', 'src/app/layout.tsx'],
         ['src/public-site/app/globals.css', 'src/app/globals.css'],
@@ -304,6 +358,10 @@ async function createBuildWorkspace(buildRoot, snapshot) {
         ...(hasRemovedBlogPaths
             ? [['src/public-site/app/blog/[...slug]/page.tsx', 'src/app/blog/[...slug]/page.tsx']]
             : []),
+        // Static export writes 404.html from this route; without it Next.js ships its
+        // built-in "This page could not be found." page for every unknown path.
+        ['src/public-site/app/not-found.tsx', 'src/app/not-found.tsx'],
+        ['src/public-site/app/posts/[slug]/page.tsx', 'src/app/posts/[slug]/page.tsx'],
         ['src/public-site/app/navigation/page.tsx', 'src/app/navigation/page.tsx'],
         ['src/public-site/app/search/page.tsx', 'src/app/search/page.tsx'],
         ['src/public-site/app/search-index.json/route.ts', 'src/app/search-index.json/route.ts'],
@@ -312,8 +370,6 @@ async function createBuildWorkspace(buildRoot, snapshot) {
         ['src/public-site/app/manifest.ts', 'src/app/manifest.ts'],
         ['src/public-site/app/llms.txt/route.ts', 'src/app/llms.txt/route.ts'],
         ['src/public-site/app/robots.ts', 'src/app/robots.ts'],
-        ['src/public-site/app/not-found.tsx', 'src/app/not-found.tsx'],
-        ['src/public-site/app/posts/[slug]/page.tsx', 'src/app/posts/[slug]/page.tsx'],
         ['src/public-site/search-index.ts', 'src/public-site/search-index.ts'],
         ['src/public-site/types.ts', 'src/public-site/types.ts'],
         ['src/public-site/snapshot.ts', 'src/public-site/snapshot.ts'],
@@ -374,11 +430,11 @@ function sha256(bytes) {
     return createHash('sha256').update(bytes).digest('hex');
 }
 
-async function createSealedRelease(releaseRoot, snapshot, rawSnapshot) {
+
+async function createSealedRelease(releaseRoot, snapshot, candidateDigest, snapshotDigest) {
     const markerPath = path.join(releaseRoot, 'app', 'out', '_release.json');
-    const candidateDigest = sha256(rawSnapshot);
     const beforeMarker = await createArtifactManifest(releaseRoot, snapshot.releaseId, new Set(['artifacts.json', `app/out/_release.json`]), candidateDigest);
-    await fs.writeFile(markerPath, JSON.stringify({ releaseId: snapshot.releaseId, candidateDigest, artifactDigest: beforeMarker.artifactDigest }), { flag: 'wx' });
+    await fs.writeFile(markerPath, JSON.stringify({ releaseId: snapshot.releaseId, candidateDigest, snapshotDigest, artifactDigest: beforeMarker.artifactDigest }), { flag: 'wx' });
     const manifest = await createArtifactManifest(releaseRoot, snapshot.releaseId, new Set(['artifacts.json']), candidateDigest);
     if (manifest.artifactDigest !== beforeMarker.artifactDigest) throw new Error('Release marker changed the artifact digest');
     await fs.writeFile(path.join(releaseRoot, 'artifacts.json'), JSON.stringify(manifest, null, 2), { flag: 'wx' });
@@ -405,12 +461,20 @@ async function moveDirectory(from, to) {
 }
 
 async function main() {
-    const { snapshotPath, outputRoot } = parseArguments(process.argv.slice(2));
+    const { snapshotPath, outputRoot, candidateDigest, snapshotDigest, identityPath } = parseArguments(process.argv.slice(2));
     await assertRegularFile(snapshotPath, 'snapshot');
     const snapshotInfo = await fs.stat(snapshotPath);
     if (snapshotInfo.size > maxSnapshotBytes) throw new Error('Frozen snapshot exceeds 4 MiB');
     const rawSnapshot = await fs.readFile(snapshotPath);
+    const actualSnapshotDigest = sha256(rawSnapshot);
+    if (!candidateDigest || !snapshotDigest) throw new Error('Candidate and frozen snapshot digests are required for a public build.');
+    if (actualSnapshotDigest !== snapshotDigest) throw new Error('Frozen snapshot bytes do not match their parent identity.');
     const snapshot = validatePublicSiteSnapshot(JSON.parse(rawSnapshot.toString('utf8')));
+    await assertCandidateIdentity(identityPath, {
+        releaseId: snapshot.releaseId,
+        candidateDigest,
+        snapshotDigest: actualSnapshotDigest,
+    });
     await assertNewOutputDirectory(outputRoot);
 
     const parentPath = path.dirname(outputRoot);
@@ -451,7 +515,7 @@ async function main() {
         await writeRemovedPages(appOutputRoot, snapshot.removedPaths);
         await writeRedirectPages(appOutputRoot, snapshot.redirects);
         await writeShareImages(appOutputRoot, snapshot, snapshotPath);
-        await createSealedRelease(releaseRoot, snapshot, rawSnapshot);
+        await createSealedRelease(releaseRoot, snapshot, candidateDigest, actualSnapshotDigest);
 
         const outputStat = await fs.lstat(outputRoot).catch((error) => error.code === 'ENOENT' ? null : Promise.reject(error));
         if (outputStat) throw new Error('Output root appeared during build; refusing to overwrite it');

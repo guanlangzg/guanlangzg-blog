@@ -149,11 +149,14 @@ function buildNavigationInventory(current: RestorableEditorData, backup: Restora
   const added: RestoreInventoryItem[] = [];
   const identical: RestoreInventoryItem[] = [];
   const currentById = new Map(current.navigation.map((item) => [navigationCategoryIdentity(current.navigationIdentities, item), item]));
+  const currentBySlug = new Map(current.navigation.map((item) => [item.slug, item]));
   const backupById = new Map(backup.navigation.map((item) => [navigationCategoryIdentity(backup.navigationIdentities, item), item]));
 
   for (const backupCategory of backup.navigation) {
     const id = navigationCategoryIdentity(backup.navigationIdentities, backupCategory);
-    const match = currentById.get(id);
+    // Stable identity is only comparable when both sides keep an identity map; the slug is the
+    // legacy-stable key and mirrors how the merge step matches a category to its current version.
+    const match = currentById.get(id) ?? currentBySlug.get(backupCategory.slug);
     if (!match) {
       added.push(inventory(id, `新增导航分类：${backupCategory.name}`));
       continue;
@@ -163,7 +166,18 @@ function buildNavigationInventory(current: RestorableEditorData, backup: Restora
       continue;
     }
     const subject = { navigationIdentity: id, categorySlug: backupCategory.slug };
-    conflicts.push(createConflict('navigation-identity', `导航分类“${match.name}”与备份中的“${backupCategory.name}”具有相同身份但内容不同。`, subject));
+    conflicts.push(createConflict('navigation-identity', `导航分类“${match.name}”与备份中的“${backupCategory.name}”属于同一分类但内容不同。`, subject));
+
+    // Tools that exist only in the backup are merged in, so the plan has to list them.
+    const currentToolUrls = new Set(match.tools.map((tool) => normalizeNavigationUrl(tool.url)));
+    for (const backupTool of backupCategory.tools) {
+      const normalizedUrl = normalizeNavigationUrl(backupTool.url);
+      if (currentToolUrls.has(normalizedUrl)) continue;
+      added.push(inventory(
+        `${backupCategory.slug}#${normalizedUrl}`,
+        `新增导航条目：${backupTool.title}（${backupCategory.name}）`,
+      ));
+    }
   }
 
   const currentWithoutIdentity = current.navigationIdentities === null;

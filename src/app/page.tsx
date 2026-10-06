@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { getPostsAsync } from '@/lib/markdown';
+import { getLivePostsFromSnapshot, getPostsAsync } from '@/lib/markdown';
+import { getPublicLiveSnapshot, isLiveReaderRuntime } from '@/lib/live-public-reader';
 import { readNavigationFromDiskAsync, readSiteSettingsFromDiskAsync } from '@/lib/editor-data-storage';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -26,12 +27,17 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function Home() {
+    // One live snapshot per request: posts, navigation and settings must all describe the same release.
+    const live = isLiveReaderRuntime() ? getPublicLiveSnapshot() : null;
     const [posts, navigation, settings] = await Promise.all([
-        getPostsAsync().then((items) => items.filter((post) => !post.slugArray.includes('navigation'))),
-        readNavigationFromDiskAsync(),
-        readSiteSettingsFromDiskAsync(),
+        live
+            ? Promise.resolve(getLivePostsFromSnapshot(live))
+            : getPostsAsync(),
+        live ? Promise.resolve(live.navigation) : readNavigationFromDiskAsync(),
+        live ? Promise.resolve(live.settings) : readSiteSettingsFromDiskAsync(),
     ]);
-    const latestPosts = posts.slice(0, 4);
+    const articlePosts = posts.filter((post) => !post.slugArray.includes('navigation'));
+    const latestPosts = articlePosts.slice(0, 4);
     const latestPost = latestPosts[0];
     const highlightedTools = navigation
         .flatMap((category) => category.tools.map((tool) => ({ ...tool, category: category.name })))
@@ -140,7 +146,7 @@ export default async function Home() {
                             <p className="font-mono text-xs uppercase tracking-token-caps text-accent">recent notes</p>
                             <h2 className="mt-1 text-2xl font-semibold text-fg">
                                 最近整理的笔记
-                                <span className="ml-2 font-mono text-sm font-normal text-subtle">({posts.length})</span>
+                                <span className="ml-2 font-mono text-sm font-normal text-subtle">({articlePosts.length})</span>
                             </h2>
                         </div>
                         <Link href="/blog" className="inline-flex items-center gap-1.5 text-sm font-medium text-link transition-colors duration-token-fast hover:text-link-hover">

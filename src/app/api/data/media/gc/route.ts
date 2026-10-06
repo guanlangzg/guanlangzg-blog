@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+    createEditorBackupStateInvalidResponse,
     createEditorDataLockTimeoutResponse,
     createEditorDataRootUnavailableResponse,
     ensureEditorWriteRequest,
@@ -40,6 +41,12 @@ export async function POST(request: NextRequest) {
 
         if (unavailableResponse) {
             return unavailableResponse;
+        }
+
+        const backupStateResponse = createEditorBackupStateInvalidResponse(error);
+
+        if (backupStateResponse) {
+            return backupStateResponse;
         }
 
         const lockTimeoutResponse = createEditorDataLockTimeoutResponse(error);

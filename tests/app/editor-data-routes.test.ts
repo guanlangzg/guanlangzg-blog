@@ -587,6 +587,32 @@ describe('editor data write APIs', () => {
     expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
+  it('returns a structured 503 when backup bookkeeping is damaged', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    process.env.BLOG_DATA_ROOT = createTempDataRoot();
+    seedRuntimeData(process.env.BLOG_DATA_ROOT);
+
+    const current = await (await getArticles(await createAuthedEditorRequest('http://localhost/api/data/articles'))).json();
+
+    // A corrupt job file must stop content writes instead of letting them land
+    // without backup bookkeeping, and it must say so instead of returning a 500.
+    writeText(path.join(process.env.BLOG_DATA_ROOT, 'workflow', 'jobs', 'corrupt.json'), '{ not json');
+
+    const response = await putArticles(
+      await createAuthedEditorRequest('http://localhost/api/data/articles', {
+        method: 'PUT',
+        body: JSON.stringify({
+          revision: current.revision,
+          articles: [createArticle('article-2', 'Blocked By Backup State')],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'backup_state_invalid' });
+    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
+  });
+
   it('marks routes non-persistent when the runtime data root path is unavailable for reads', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createBlockedDataRoot();

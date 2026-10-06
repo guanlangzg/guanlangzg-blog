@@ -46,6 +46,7 @@ import {
 import type { EditorMediaManifest } from '@/lib/editor-media-storage';
 import { createJsonRevision } from '@/lib/json-revision';
 import {
+    assertBackupStateWritableUnderLock,
     recordContentMutationUnderLock,
     recordRestoredContentMutationUnderLock,
 } from '@/lib/jobs/watermark';
@@ -977,6 +978,10 @@ function commitEditorDataResourceWrite(
         throw new EditorDataRootNotConfiguredError();
     }
 
+    // Fail before the transaction starts: a damaged watermark or job file must
+    // stop the write instead of letting data land without backup bookkeeping.
+    assertBackupStateWritableUnderLock(root);
+
     const manifest = readEditorDataManifest();
     const previousManifest = manifest.resources[resource] ?? null;
     const resourceManifest = createResourceManifest(value);
@@ -1360,6 +1365,9 @@ export async function restoreEditorDataRootAtomically(data: {
 }): Promise<EditorDataManifest> {
     return withEditorDataRootLock(async () => {
         const root = getEditorDataRootOrThrow();
+        // Restore replaces the whole data set and rewrites the watermark, so it
+        // must refuse a damaged watermark or job file instead of overwriting it.
+        assertBackupStateWritableUnderLock(root);
         const stagingRoot = createRestoreDirectory(root, '.restore-staging');
         const backupRoot = createRestoreDirectory(root, '.restore-backup');
         const files = getEditorDataFiles(root);

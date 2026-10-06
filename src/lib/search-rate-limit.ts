@@ -66,6 +66,49 @@ function createClientIdentityConfigurationResponse(): NextResponse {
     );
 }
 
+// A spoofable client identity (`TRUSTED_PROXY_IPS=*` or `SKIP_IP_VALIDATION=true`) lets a caller
+// rotate `X-Forwarded-For` and reach search with a fresh per-client bucket every time, so the
+// per-client limiter alone cannot bound the work the endpoint does. Anonymous searches therefore
+// also spend from one process-wide budget; the ceiling is far above real reader traffic and only
+// stops header rotation from turning search into an unbounded scan.
+const ANONYMOUS_SEARCH_WINDOW_MS = 60 * 1000;
+const ANONYMOUS_SEARCH_GLOBAL_LIMIT = 240;
+
+interface AnonymousSearchBudget {
+    windowStartedAt: number;
+    used: number;
+}
+
+function createAnonymousSearchBudget(): AnonymousSearchBudget {
+    return { windowStartedAt: Date.now(), used: 0 };
+}
+
+let anonymousSearchBudget = createAnonymousSearchBudget();
+
+function createAnonymousSearchBudgetResponse(): NextResponse {
+    return NextResponse.json(
+        {
+            message: '搜索请求过于频繁，请稍后再试。',
+        },
+        { status: 429 }
+    );
+}
+
+export function getAnonymousSearchBudgetResponse(): NextResponse | null {
+    const now = Date.now();
+
+    if (now - anonymousSearchBudget.windowStartedAt >= ANONYMOUS_SEARCH_WINDOW_MS) {
+        anonymousSearchBudget = createAnonymousSearchBudget();
+    }
+
+    if (anonymousSearchBudget.used >= ANONYMOUS_SEARCH_GLOBAL_LIMIT) {
+        return createAnonymousSearchBudgetResponse();
+    }
+
+    anonymousSearchBudget.used += 1;
+    return null;
+}
+
 export function getSearchRateLimitResponse(request: NextRequest): NextResponse | null {
     if (!isRequestClientIdReliable()) {
         return createClientIdentityConfigurationResponse();
@@ -102,4 +145,5 @@ export function resetSearchRateLimitForTests(): void {
     }
 
     searchRateLimitBuckets.clear();
+    anonymousSearchBudget = createAnonymousSearchBudget();
 }

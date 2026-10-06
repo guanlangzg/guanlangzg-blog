@@ -4,7 +4,12 @@ import { randomUUID } from 'node:crypto';
 import { writeJsonAtomically } from '@/lib/atomic-json-writer';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 import { withRuntimeDataRootLock } from '@/lib/runtime-data-lock';
-import { createJobUnderLock } from '@/lib/jobs/store';
+import {
+    createJobUnderLock,
+    inspectJobsDirectory,
+    type InvalidPersistedFile,
+    type JobRecord,
+} from '@/lib/jobs/store';
 
 export interface BackupWatermarkState {
     generation: string;
@@ -57,20 +62,35 @@ export function parseBackupWatermark(value: unknown): BackupWatermarkState | nul
     };
 }
 
-export function readBackupWatermarkUnderLock(root: string): BackupWatermarkState {
+function readBackupWatermarkFile(root: string): { state: BackupWatermarkState | null; invalid: boolean } {
     const filePath = watermarkPath(root);
+
     if (!fs.existsSync(filePath)) {
-        const initial = createInitialBackupWatermark();
-        writeJsonAtomically(filePath, initial);
-        return initial;
+        return { state: null, invalid: false };
     }
 
-    const parsed = parseBackupWatermark(JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown);
-    if (!parsed) {
-        throw new Error(`Invalid backup watermark: ${filePath}`);
+    try {
+        const parsed = parseBackupWatermark(JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown);
+        return parsed ? { state: parsed, invalid: false } : { state: null, invalid: true };
+    } catch {
+        return { state: null, invalid: true };
+    }
+}
+
+export function readBackupWatermarkUnderLock(root: string): BackupWatermarkState {
+    const current = readBackupWatermarkFile(root);
+
+    if (current.invalid) {
+        throw new Error(`Invalid backup watermark: ${watermarkPath(root)}`);
     }
 
-    return parsed;
+    if (current.state) {
+        return current.state;
+    }
+
+    const initial = createInitialBackupWatermark();
+    writeJsonAtomically(watermarkPath(root), initial);
+    return initial;
 }
 
 export async function readBackupWatermark(): Promise<BackupWatermarkState> {
@@ -79,6 +99,63 @@ export async function readBackupWatermark(): Promise<BackupWatermarkState> {
 
 export function isBackupCaughtUp(state: BackupWatermarkState): boolean {
     return state.blockedReason === null && state.backedUpThrough >= state.contentSequence;
+}
+
+export interface PersistedBackupStateInspection {
+    watermarkPresent: boolean;
+    watermarkInvalid: boolean;
+    invalidFiles: InvalidPersistedFile[];
+    jobCounts: {
+        pending: number;
+        running: number;
+        failed: number;
+    };
+}
+
+/**
+ * Read-only inspection for readiness probes: it never acquires the data lock
+ * (so a public probe can never reverse-wait behind a content writer) and never
+ * writes, so damaged files are reported instead of being replaced.
+ */
+export function inspectPersistedBackupState(root: string): PersistedBackupStateInspection {
+    const watermark = readBackupWatermarkFile(root);
+    const { jobs, invalidFiles } = inspectJobsDirectory(root);
+
+    return {
+        watermarkPresent: watermark.state !== null,
+        watermarkInvalid: watermark.invalid,
+        invalidFiles: [
+            ...(watermark.invalid ? [{ path: watermarkPath(root), reason: 'invalid backup watermark' }] : []),
+            ...invalidFiles,
+        ],
+        jobCounts: {
+            pending: jobs.filter((job) => job.status === 'pending' || job.status === 'retry').length,
+            running: jobs.filter((job) => job.status === 'running').length,
+            failed: jobs.filter((job) => job.status === 'failed').length,
+        },
+    };
+}
+
+export class BackupStateInvalidError extends Error {
+    constructor(public readonly invalidFiles: InvalidPersistedFile[]) {
+        super(`Backup state files are invalid: ${invalidFiles.map((file) => file.path).join(', ')}`);
+        this.name = 'BackupStateInvalidError';
+    }
+}
+
+/**
+ * Content writes must refuse to start while backup bookkeeping is damaged, so a
+ * write can never land without its dirty watermark entry and a damaged watermark
+ * or job file is never silently replaced.
+ */
+export function assertBackupStateWritableUnderLock(root: string): BackupWatermarkState {
+    const inspection = inspectPersistedBackupState(root);
+
+    if (inspection.invalidFiles.length > 0) {
+        throw new BackupStateInvalidError(inspection.invalidFiles);
+    }
+
+    return readBackupWatermarkUnderLock(root);
 }
 
 export function recordContentMutationUnderLock(
@@ -107,6 +184,11 @@ export function recordRestoredContentMutationUnderLock(
     root: string,
     input: { digest: string; value: unknown }
 ): BackupWatermarkState {
+    const current = readBackupWatermarkFile(root);
+    if (current.invalid) {
+        throw new BackupStateInvalidError([{ path: watermarkPath(root), reason: 'invalid backup watermark' }]);
+    }
+
     const next = {
         generation: randomUUID(),
         contentSequence: 1,
@@ -169,33 +251,38 @@ export async function setBackupBlockedReason(reason: string | null): Promise<Bac
     });
 }
 
+function isDirtyBackupJob(job: JobRecord, state: BackupWatermarkState): boolean {
+    if (
+        job.type !== 'backup' ||
+        (job.status !== 'pending' && job.status !== 'retry' && job.status !== 'running') ||
+        !job.input || typeof job.input !== 'object' || Array.isArray(job.input)
+    ) {
+        return false;
+    }
+
+    const input = job.input as Record<string, unknown>;
+    return input.generation === state.generation && input.contentSequence === state.contentSequence;
+}
+
 export function ensureDirtyBackupJobUnderLock(root: string): void {
-    const state = readBackupWatermarkUnderLock(root);
+    const current = readBackupWatermarkFile(root);
+
+    if (current.invalid) {
+        console.error(
+            '[jobs-watermark] Backup watermark file is invalid; dirty backup tracking is suspended until it is repaired:',
+            watermarkPath(root)
+        );
+        return;
+    }
+
+    const state = current.state ?? readBackupWatermarkUnderLock(root);
+
     if (isBackupCaughtUp(state)) {
         return;
     }
 
-    const jobsDirectory = path.join(root, 'workflow', 'jobs');
-    if (fs.existsSync(jobsDirectory)) {
-        for (const fileName of fs.readdirSync(jobsDirectory)) {
-            if (!fileName.endsWith('.json')) {
-                continue;
-            }
-
-            const job = JSON.parse(fs.readFileSync(path.join(jobsDirectory, fileName), 'utf8')) as {
-                type?: unknown;
-                input?: { generation?: unknown; contentSequence?: unknown };
-                status?: unknown;
-            };
-            if (
-                job.type === 'backup' &&
-                job.input?.generation === state.generation &&
-                job.input.contentSequence === state.contentSequence &&
-                (job.status === 'pending' || job.status === 'retry' || job.status === 'running')
-            ) {
-                return;
-            }
-        }
+    if (inspectJobsDirectory(root).jobs.some((job) => isDirtyBackupJob(job, state))) {
+        return;
     }
 
     createJobUnderLock(root, {

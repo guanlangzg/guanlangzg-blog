@@ -31,6 +31,10 @@ __mocks__
 .env.local
 .env.*.local
 
+# Credential material: both compose files bind-mount secrets/ inside the work tree
+secrets
+**/secrets
+
 *.md
 !README.md
 !content/seeds/posts/**/*.md

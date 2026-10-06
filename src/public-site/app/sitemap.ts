@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next';
-import snapshot from '@/public-site/snapshot';
+import snapshot, { parseSnapshotDate } from '@/public-site/snapshot';
 
 export const dynamic = 'force-static';
 
@@ -10,6 +10,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
         { url: `${siteUrl}/blog/` },
         { url: `${siteUrl}/navigation/` },
         { url: `${siteUrl}/search/` },
-        ...snapshot.posts.map((post) => ({ url: `${siteUrl}/posts/${encodeURIComponent(post.slug)}/`, lastModified: post.date })),
+        ...snapshot.posts.map((post) => ({
+            url: `${siteUrl}/posts/${encodeURIComponent(post.slug)}/`,
+            // The editor's own calendar day is published as written; a value that is not a real
+            // calendar day is dropped instead of emitting a `<lastmod>` search engines reject.
+            ...(parseSnapshotDate(post.date) ? { lastModified: post.date } : {}),
+        })),
     ];
 }

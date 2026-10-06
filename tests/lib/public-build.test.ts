@@ -37,6 +37,13 @@ describe('public build snapshot boundary', () => {
         })).toThrow(/slug/i);
     });
 
+    it('accepts removed article paths as well as legacy blog paths', () => {
+        expect(validatePublicSiteSnapshot({
+            ...snapshot,
+            removedPaths: ['/posts/withdrawn/'],
+        })).toMatchObject({ removedPaths: ['/posts/withdrawn/'] });
+    });
+
     it('accepts additive redirect and removed-path arrays under schema version 1', () => {
         expect(validatePublicSiteSnapshot({
             ...snapshot,
@@ -46,6 +53,22 @@ describe('public build snapshot boundary', () => {
             redirects: [{ from: '/posts/old/', to: '/posts/new/' }],
             removedPaths: ['/blog/old/'],
         });
+    });
+
+    it('rejects a frozen snapshot that gives one public path two owners', () => {
+        expect(() => validatePublicSiteSnapshot({
+            ...snapshot,
+            removedPaths: ['/posts/中文单段文章/'],
+        })).toThrow(/both claim/i);
+        expect(() => validatePublicSiteSnapshot({
+            ...snapshot,
+            redirects: [{ from: '/posts/中文单段文章/', to: '/posts/elsewhere/' }],
+        })).toThrow(/both claim/i);
+        expect(() => validatePublicSiteSnapshot({
+            ...snapshot,
+            redirects: [{ from: '/posts/old/', to: '/posts/elsewhere/' }],
+            removedPaths: ['/posts/old'],
+        })).toThrow(/both claim/i);
     });
 
     it('rejects redirect loops and fields outside the frozen public snapshot schema', () => {

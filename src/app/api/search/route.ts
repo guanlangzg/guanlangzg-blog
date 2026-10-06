@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ensureEditorSession } from '@/lib/editor-api-auth';
+import { getPublicLiveSnapshot, isLiveReaderRuntime, type PublicLiveSnapshot } from '@/lib/live-public-reader';
 import { readNavigationFromDiskAsync } from '@/lib/editor-data-storage';
 import { getSearchablePostsAsync } from '@/lib/markdown';
 import { readSearchIndexFromDiskAsync, type SearchIndexDocument } from '@/lib/search-index';
-import { getSearchRateLimitResponse } from '@/lib/search-rate-limit';
+import { getAnonymousSearchBudgetResponse, getSearchRateLimitResponse } from '@/lib/search-rate-limit';
 import {
     isSearchQueryAllowed,
     normalizeSearchQuery,
@@ -72,7 +73,44 @@ function getToolSearchScore(parts: {
     );
 }
 
-async function getSearchDocuments(): Promise<SearchIndexDocument[]> {
+async function getSearchDocuments(live: PublicLiveSnapshot | null): Promise<SearchIndexDocument[]> {
+    if (live) {
+        const posts = live.articles;
+        const navigation = live.navigation;
+        return [...posts
+            .map((article) => ({
+                meta: {
+                    title: article.title,
+                    slug: article.slug ?? article.id,
+                    description: article.description,
+                    date: article.date,
+                    tags: article.tags,
+                    slugArray: [article.slug ?? article.id],
+                },
+                content: article.content,
+            }))
+            .filter((post) => !post.meta.slugArray.includes('navigation'))
+            .map((post) => ({
+                type: 'post' as const,
+                title: post.meta.title,
+                slug: post.meta.slug,
+                href: `/posts/${post.meta.slug}`,
+                description: post.meta.description ?? '',
+                date: post.meta.date,
+                tags: post.meta.tags,
+                content: post.content,
+            })),
+        ...navigation.flatMap((category) => category.tools.map((tool) => ({
+            type: 'tool' as const,
+            title: tool.title,
+            slug: tool.url,
+            href: tool.url,
+            description: tool.description,
+            categoryName: category.name,
+            tags: tool.tags,
+            url: tool.url,
+        })))];
+    }
     const index = await readSearchIndexFromDiskAsync().catch((error: unknown) => {
         console.warn('[search] Failed to read derived search index; falling back to source data:', error);
         return null;
@@ -131,14 +169,16 @@ async function getSearchDocuments(): Promise<SearchIndexDocument[]> {
 }
 
 /**
- * Searches the live working copy, so it is management-only. Readers search the static index
- * published with the release; this endpoint would otherwise expose unpublished drafts.
+ * Signed-in searches use the working-copy index. Anonymous production searches are built only
+ * from one verified live release snapshot and never fall back to draft storage.
  */
 export async function GET(request: NextRequest) {
-    const authError = await ensureEditorSession(request);
+    const isPublicReader = isLiveReaderRuntime();
+    const live = isPublicReader ? getPublicLiveSnapshot() : null;
 
-    if (authError) {
-        return authError;
+    if (!isPublicReader) {
+        const authError = await ensureEditorSession(request);
+        if (authError) return authError;
     }
 
     const query = normalizeSearchQuery(request.nextUrl.searchParams.get('q'));
@@ -153,7 +193,17 @@ export async function GET(request: NextRequest) {
         return rateLimitResponse;
     }
 
-    const documents = await getSearchDocuments();
+    if (isPublicReader) {
+        // Beyond the per-client limit, an anonymous scan also spends from one shared budget so a
+        // spoofable X-Forwarded-For cannot buy unlimited work by rotating identities.
+        const budgetResponse = getAnonymousSearchBudgetResponse();
+
+        if (budgetResponse) {
+            return budgetResponse;
+        }
+    }
+
+    const documents = await getSearchDocuments(live);
 
     const postResults = documents
         .filter((document): document is Extract<SearchIndexDocument, { type: 'post' }> => document.type === 'post')

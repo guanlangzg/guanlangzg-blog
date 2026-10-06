@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ArticleDataParseError,
   createArticleSlug,
   filterArticlesData,
   isArticle,
@@ -103,11 +104,43 @@ describe('article data contract', () => {
       }),
     ]);
 
-    expect(parseArticlesData([{ ...article, kind: 'unknown', status: 'invalid' }])).toEqual([
+    expect(parseArticlesData([{ ...article, kind: 'unknown' }])).toEqual([
       expect.objectContaining({
         kind: 'essay',
         status: 'published',
       }),
+    ]);
+  });
+
+  it('rejects unrecognized statuses instead of silently publishing them', () => {
+    for (const status of ['publisehd', 'DRAFT', '', 'published draft', 3, null]) {
+      expect(isArticle({ ...article, status })).toBe(false);
+      expect(parseArticlesData([{ ...article, status }])).toBeNull();
+      expect(() => parseArticlesDataOrThrow([{ ...article, status }])).toThrow(ArticleDataParseError);
+    }
+
+    expect(() => parseArticlesDataOrThrow([{ ...article, status: 'publisehd' }])).toThrow(
+      '文章 status 无效：publisehd'
+    );
+  });
+
+  it('trims status whitespace and keeps legacy records without a status published', () => {
+    expect(parseArticlesData([{ ...article, status: ' seedling ' }])).toEqual([
+      expect.objectContaining({ status: 'seedling' }),
+    ]);
+    expect(parseArticlesData([article])).toEqual([
+      expect.objectContaining({ status: 'published' }),
+    ]);
+  });
+
+  it('keeps local recovery records as drafts when their status is unrecognized', () => {
+    expect(filterArticlesData([{ ...article, status: 'publisehd' }])).toEqual([
+      {
+        ...article,
+        slug: createArticleSlug(article),
+        ...normalizedDefaults,
+        status: 'draft',
+      },
     ]);
   });
 

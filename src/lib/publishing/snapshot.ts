@@ -150,6 +150,49 @@ function addRemovedPath(paths: string[], article: Article): string[] {
   return paths.includes(removedPath) ? paths : [...paths, removedPath];
 }
 
+const REMOVABLE_PATH_PREFIXES = new Set(['blog', 'posts']);
+
+/** Only /posts/<slug>/ and the legacy /blog/<slug>/ can carry a removal notice. */
+function isRemovablePath(route: string): boolean {
+  const segments = route.split('/').filter(Boolean);
+  return segments.length === 2 && REMOVABLE_PATH_PREFIXES.has(segments[0].toLocaleLowerCase('en-US'));
+}
+
+function redirectTargetPath(route: string): string {
+  return new URL(route, 'https://guanlangzg.github.io').pathname;
+}
+
+/**
+ * A release writes exactly one document per public path: an article page, a rename redirect
+ * or a removal notice. Publishing, renaming and withdrawing can leave two of them claiming
+ * the same path, which would make the artifact export fail on a duplicate output file, so the
+ * surviving records are resolved here: live pages win over stale records, a redirect shell
+ * wins over a removal notice, and a redirect never points at content that is gone.
+ */
+function resolvePathOwnership(candidate: SiteSnapshot): void {
+  const livePaths = new Set(candidate.articles.map(articlePath));
+  const removed = new Set(candidate.removedPaths.filter((route) => !livePaths.has(route)));
+  let redirects = candidate.redirects.filter((redirect) => !livePaths.has(redirect.from));
+  for (const redirect of redirects) removed.delete(redirect.from);
+
+  for (;;) {
+    const sources = new Set(redirects.map((redirect) => redirect.from));
+    const retired = redirects.filter((redirect) => {
+      const target = redirectTargetPath(redirect.to);
+      return !livePaths.has(target) && !sources.has(target);
+    });
+    if (!retired.length) break;
+    const retiredSources = new Set(retired.map((redirect) => redirect.from));
+    redirects = redirects.filter((redirect) => !retiredSources.has(redirect.from));
+    for (const route of retiredSources) {
+      if (isRemovablePath(route)) removed.add(route);
+    }
+  }
+
+  candidate.redirects = redirects;
+  candidate.removedPaths = [...removed];
+}
+
 function mergeBootstrapArticles(base: Article[], selected: Article[]): Article[] {
   const selectedById = new Map(selected.map((article) => [article.id, article]));
   const merged = base.map((article) => selectedById.get(article.id) ?? article);
@@ -216,6 +259,7 @@ export function createCandidate(
   scope: PublishScope,
 ): SiteSnapshot {
   const candidate = applyScope(base, draft, scope);
+  resolvePathOwnership(candidate);
   validateArticlePaths(candidate.articles);
   candidate.media = selectMedia(candidate, base, draft);
   return candidate;

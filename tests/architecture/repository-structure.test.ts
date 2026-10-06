@@ -75,6 +75,8 @@ describe('repository architecture boundaries', () => {
         // The standalone management server is placed under /app/management so the
         // container also keeps the public-site builder sources and dependencies.
         expect(dockerfile).toContain('COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone /app/management');
+        expect(dockerfile).toContain('/app/src/public-site/app/manifest.ts');
+        expect(dockerfile).toContain('/app/src/public-site/app/llms.txt/route.ts');
         expect(deployCompose).toMatch(/^\s+image:\s+\$\{DEPLOY_IMAGE:\?Set DEPLOY_IMAGE/m);
         // Three independent roots keep content, credentials and the rebuildable build
         // workspace under separate persistence and retention rules.

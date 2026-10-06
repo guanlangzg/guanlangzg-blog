@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+    createEditorBackupStateInvalidResponse,
     createEditorDataRootUnavailableResponse,
     ensureEditorWriteRequest,
 } from '@/lib/editor-api-auth';
@@ -183,6 +184,12 @@ export async function POST(request: NextRequest) {
 
         if (unavailableResponse) {
             return unavailableResponse;
+        }
+
+        const backupStateResponse = createEditorBackupStateInvalidResponse(error);
+
+        if (backupStateResponse) {
+            return backupStateResponse;
         }
 
         const invalidMediaResponse = createInvalidMediaResponse(error);

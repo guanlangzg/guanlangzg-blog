@@ -19,6 +19,8 @@ output/
 .g01-public-site-*/
 
 # Credentials and local environment
+# Both compose files bind-mount a secrets/ directory inside the work tree
+secrets/
 .env*
 !.env.example
 

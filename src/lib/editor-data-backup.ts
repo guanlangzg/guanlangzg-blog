@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { isRecord, parseArticlesDataOrThrow } from '@/lib/article-data';
 import {
+    parseEditorDataManifest,
     createDerivedEditorDataManifestSnapshot,
     createEditorDataManifestSnapshot,
     EDITOR_DATA_SCHEMA_VERSION,
@@ -17,6 +18,7 @@ import {
     type EditorDataManifest,
     type EditorDataResourceName,
 } from '@/lib/editor-data-storage';
+import { createJsonRevision } from '@/lib/json-revision';
 import { parseNavigationDataOrThrow } from '@/lib/navigation-data';
 import {
     createDefaultSiteSettings,
@@ -585,6 +587,45 @@ function wrapEditorBackupParseError<T>(parse: () => T, fallbackMessage: string):
     }
 }
 
+/**
+ * A payload carries the manifest its own data was hashed into. Verifying that manifest is the
+ * only integrity signal a local or legacy R2 payload has, so a mismatch must fail before the
+ * restore transaction starts. Raw payload values are hashed (not the normalized ones) because
+ * that is what the writer hashed, which keeps backups written before field normalization valid.
+ */
+function assertEditorBackupManifestMatchesData(
+    payload: Record<string, unknown>,
+    source: Record<string, unknown>
+): void {
+    if (payload.manifest === undefined) {
+        return;
+    }
+
+    if (!isRecord(payload.manifest)) {
+        throw new EditorBackupFormatError('备份清单格式无效。');
+    }
+
+    const manifest = parseEditorDataManifest(payload.manifest);
+
+    if (!manifest) {
+        throw new EditorBackupFormatError('备份清单格式无效。');
+    }
+
+    for (const resource of ['articles', 'navigation', 'settings'] as const) {
+        const declared = manifest.resources[resource];
+        const data = source[resource];
+
+        // A payload may legitimately omit settings or ship no manifest entry at all.
+        if (!declared || data === undefined) {
+            continue;
+        }
+
+        if (declared.hash !== createJsonRevision(data)) {
+            throw new EditorBackupFormatError(`备份 ${resource} 数据与备份清单不一致。`);
+        }
+    }
+}
+
 export function parseEditorBackupDataOrThrow(value: unknown): EditorBackupData {
     if (!isRecord(value)) {
         throw new EditorBackupFormatError('备份文件必须是 JSON 对象。');
@@ -602,6 +643,8 @@ export function parseEditorBackupDataOrThrow(value: unknown): EditorBackupData {
     if (!Array.isArray(source.articles) || !Array.isArray(source.navigation)) {
         throw new EditorBackupFormatError('备份文件必须包含 articles 和 navigation 数组。');
     }
+
+    assertEditorBackupManifestMatchesData(value, source);
 
     const articles = wrapEditorBackupParseError(
         () => parseArticlesDataOrThrow(source.articles),
