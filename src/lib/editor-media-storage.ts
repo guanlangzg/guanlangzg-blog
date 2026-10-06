@@ -6,7 +6,7 @@ import { isRecord } from '@/lib/article-data';
 import { fsyncDirectory, writeJsonAtomically } from '@/lib/atomic-json-writer';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 import { withRuntimeDataRootLock } from '@/lib/runtime-data-lock';
-import { recordContentMutationUnderLock } from '@/lib/jobs/watermark';
+import { assertBackupStateWritableUnderLock, recordContentMutationUnderLock } from '@/lib/jobs/watermark';
 import { createJsonRevision } from '@/lib/json-revision';
 import { readVerifiedLiveSnapshot } from '@/lib/live-public-reader';
 
@@ -189,6 +189,10 @@ export function readEditorMediaManifest(): EditorMediaManifest {
 
 export async function writeEditorMediaManifest(manifest: EditorMediaManifest): Promise<void> {
     await withRuntimeDataRootLock(() => {
+        // Media is content too: a damaged watermark or job file must stop this write
+        // exactly like the article/navigation/settings writers, so an upload can never
+        // land without its dirty watermark entry.
+        assertBackupStateWritableUnderLock(getRuntimeDataRootPath());
         writeJsonAtomically(getMediaManifestFilePath(), manifest);
         recordContentMutationUnderLock(getRuntimeDataRootPath(), {
             resource: 'media',

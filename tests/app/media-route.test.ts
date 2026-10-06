@@ -431,6 +431,35 @@ describe('media API', () => {
     expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
+  it('refuses uploads while backup bookkeeping is damaged', async () => {
+    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
+    process.env.BLOG_DATA_ROOT = createTempDataRoot();
+
+    const headers = await createAuthenticatedHeaders();
+    // Media is content too: a corrupt job file must stop the upload instead of
+    // letting the manifest change without its dirty watermark entry.
+    fs.mkdirSync(path.join(process.env.BLOG_DATA_ROOT, 'workflow', 'jobs'), { recursive: true });
+    fs.writeFileSync(path.join(process.env.BLOG_DATA_ROOT, 'workflow', 'jobs', 'corrupt.json'), '{ not json', 'utf8');
+
+    const upload = createImageUpload();
+    const requestHeaders = new Headers(headers);
+
+    for (const [name, value] of Object.entries(upload.headers)) {
+      requestHeaders.set(name, value);
+    }
+
+    const response = await POST(new NextRequest('http://localhost/api/data/media', {
+      method: 'POST',
+      headers: requestHeaders,
+      body: upload.body,
+    }));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: 'backup_state_invalid' });
+    expect(fs.existsSync(path.join(process.env.BLOG_DATA_ROOT, 'media', 'manifest.json'))).toBe(false);
+    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
+  });
+
   it('preserves both assets when two different images are uploaded concurrently', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
