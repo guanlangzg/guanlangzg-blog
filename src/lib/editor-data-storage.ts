@@ -90,7 +90,7 @@ export type EditorDataResourceWriteResult<T> =
         currentManifest: EditorDataResourceManifest | null;
     };
 
-export class EditorDataRootNotConfiguredError extends Error {
+class EditorDataRootNotConfiguredError extends Error {
     constructor() {
         super('Runtime data root is not configured.');
         this.name = 'EditorDataRootNotConfiguredError';
@@ -913,17 +913,17 @@ export function getArticlesDataFilePath(): string | null {
     return root ? path.join(root, 'articles', ARTICLES_FILE_NAME) : null;
 }
 
-export function getNavigationDataFilePath(): string | null {
+function getNavigationDataFilePath(): string | null {
     const root = getEditorDataRoot();
     return root ? path.join(root, 'navigation', NAVIGATION_FILE_NAME) : null;
 }
 
-export function getSiteSettingsDataFilePath(): string | null {
+function getSiteSettingsDataFilePath(): string | null {
     const root = getEditorDataRoot();
     return root ? path.join(root, 'settings', SETTINGS_FILE_NAME) : null;
 }
 
-export function getEditorDataManifestFilePath(): string | null {
+function getEditorDataManifestFilePath(): string | null {
     const root = getEditorDataRoot();
     return root ? path.join(root, MANIFEST_FILE_NAME) : null;
 }

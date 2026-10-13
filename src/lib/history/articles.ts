@@ -28,13 +28,13 @@ const GITHUB_API_VERSION = '2022-11-28';
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 
-export interface ArticleHistoryCommit {
+interface ArticleHistoryCommit {
   sha: string;
   message: string;
   committedAt: string;
 }
 
-export interface ArticleHistoryPageResult {
+interface ArticleHistoryPageResult {
   commits: ArticleHistoryCommit[];
   nextPage: number | null;
 }
@@ -44,7 +44,7 @@ export interface ArticleHistoryApi {
   readFile(path: string, commitSha: string): Promise<Uint8Array>;
 }
 
-export interface ArticleHistorySummary {
+interface ArticleHistorySummary {
   title: string;
   slug: string | null;
   updatedAt: number;
@@ -53,7 +53,7 @@ export interface ArticleHistorySummary {
   metadataDigest: string;
 }
 
-export interface ArticleHistoryVersion {
+interface ArticleHistoryVersion {
   commitSha: string;
   message: string;
   committedAt: string;

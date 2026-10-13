@@ -33,18 +33,13 @@ function createBlockedDataRoot(): string {
   return path.join(blockingFile, 'runtime-data');
 }
 
-function writeJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf8');
-}
-
 afterEach(() => {
   restoreEnv(ORIGINAL_ENV);
   cleanupTempDirectories(tempDirectories);
 });
 
 describe('ready API', () => {
-  it('reports version, writable data root, manifest, and backup queue status', async () => {
+  it('reports version, writable data root, manifest, and persisted jobs', async () => {
     process.env.BLOG_DATA_ROOT = createDataRoot();
     process.env.BLOG_NAVIGATION_DOCKER = 'true';
     process.env.BLOG_NAVIGATION_VERSION = '9.8.7';
@@ -71,9 +66,9 @@ describe('ready API', () => {
         manifest: expect.objectContaining({
           valid: true,
         }),
-        backupQueue: expect.objectContaining({
-          pending: 0,
-          failed: 0,
+        persistedState: expect.objectContaining({
+          valid: true,
+          jobCounts: { pending: 0, running: 0, failed: 0 },
         }),
       })
     );
@@ -96,79 +91,6 @@ describe('ready API', () => {
         }),
       })
     );
-  });
-
-  it('keeps readiness ok when only remote backup queue has failed tasks', async () => {
-    process.env.BLOG_DATA_ROOT = createDataRoot();
-    writeJson(path.join(process.env.BLOG_DATA_ROOT, '.backup-pending.json'), {
-      version: 2,
-      tasks: [
-        {
-          id: 'failed-task-1',
-          reason: 'remote-restore',
-          timestamp: '2026-06-19T00:00:00.000Z',
-          retries: 3,
-          attempts: 3,
-          status: 'failed',
-          writeSnapshot: true,
-          lastError: 'R2 upload failed.',
-          lastAttemptAt: '2026-06-19T00:10:00.000Z',
-        },
-      ],
-    });
-
-    const response = await GET();
-    const payload = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(payload).toEqual(
-      expect.objectContaining({
-        status: 'ok',
-        backupQueue: {
-          pending: 0,
-          failed: 1,
-          failedTasks: [
-            {
-              id: 'failed-task-1',
-              reason: 'remote-restore',
-              attempts: 3,
-              lastAttemptAt: '2026-06-19T00:10:00.000Z',
-              lastError: null,
-            },
-          ],
-        },
-      })
-    );
-  });
-
-  it('never exposes raw backup error text to anonymous callers', async () => {
-    process.env.BLOG_DATA_ROOT = createDataRoot();
-    const sensitiveError = 'NoSuchBucket bucket=private-backups endpoint=https://acct123.r2.cloudflarestorage.com x-amz-request-id=ABC';
-    writeJson(path.join(process.env.BLOG_DATA_ROOT, '.backup-pending.json'), {
-      version: 2,
-      tasks: [
-        {
-          id: 'failed-task-2',
-          reason: 'remote-restore',
-          timestamp: '2026-06-19T00:00:00.000Z',
-          retries: 3,
-          attempts: 3,
-          status: 'failed',
-          writeSnapshot: true,
-          lastError: sensitiveError,
-          lastAttemptAt: '2026-06-19T00:10:00.000Z',
-        },
-      ],
-    });
-
-    const response = await GET();
-    const payload = await response.json();
-
-    expect(JSON.stringify(payload)).not.toContain('private-backups');
-    expect(JSON.stringify(payload)).not.toContain('acct123');
-    expect(JSON.stringify(payload)).not.toContain('x-amz-request-id');
-    expect(payload.backupQueue.failed).toBe(1);
-    expect(payload.backupQueue.failedTasks[0].lastError).toBeNull();
   });
 
   it('reports corrupt persisted state files without touching or rewriting them', async () => {
@@ -221,26 +143,5 @@ describe('ready API', () => {
     } finally {
       releaseEditorDataRootLock(lock);
     }
-  });
-
-  it('keeps readiness ok when remote backup queue state is unreadable', async () => {
-    process.env.BLOG_DATA_ROOT = createDataRoot();
-    fs.writeFileSync(path.join(process.env.BLOG_DATA_ROOT, '.backup-pending.json'), '{', 'utf8');
-
-    const response = await GET();
-    const payload = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(payload).toEqual(
-      expect.objectContaining({
-        status: 'ok',
-        backupQueue: {
-          pending: null,
-          failed: null,
-          failedTasks: [],
-          message: 'Pending backup queue state is invalid.',
-        },
-      })
-    );
   });
 });

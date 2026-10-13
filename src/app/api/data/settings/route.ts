@@ -21,7 +21,6 @@ import {
     readSiteSettingsFromDisk,
     writeSiteSettingsToDiskIfRevisionMatches,
 } from '@/lib/editor-data-storage';
-import { queueCurrentBackupToRemote } from '@/lib/editor-remote-backup';
 import { getAppVersionInfo } from '@/lib/app-version';
 import { createDefaultSiteSettings, parseSiteSettingsOrThrow, SiteSettingsParseError } from '@/lib/site-settings';
 import { invalidatePublicContentCache } from '@/lib/public-cache-invalidation';
@@ -155,16 +154,12 @@ export async function PUT(request: NextRequest) {
         );
     }
 
-    const remoteBackup = await queueCurrentBackupToRemote({
-        reason: 'settings-write',
-    });
     invalidatePublicContentCache('settings-write');
 
     return NextResponse.json({
         success: true,
         settings,
         revision: writeResult.resourceManifest.revision,
-        remoteBackup,
         version: getAppVersionInfo(),
     });
 }

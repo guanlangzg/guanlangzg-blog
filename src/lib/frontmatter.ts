@@ -201,7 +201,7 @@ export function parseRawMarkdownFrontmatter(markdown: string): ParsedRawFrontmat
     };
 }
 
-export function stringifyRawMarkdownFrontmatter(content: string, data: Record<string, unknown>): string {
+function stringifyRawMarkdownFrontmatter(content: string, data: Record<string, unknown>): string {
     const yaml = stringify(data, {
         lineWidth: 0,
     }).trimEnd();

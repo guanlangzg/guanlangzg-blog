@@ -20,12 +20,6 @@ import {
     createCurrentEditorBackupPayload,
     restoreEditorBackupPayload,
 } from '@/lib/editor-data-backup';
-import {
-    getRemoteBackupQueueSnapshot,
-    queueCurrentBackupToRemote,
-    shouldQueueRemoteBackupRetry,
-    syncCurrentBackupToRemote,
-} from '@/lib/editor-remote-backup';
 import { invalidatePublicContentCache } from '@/lib/public-cache-invalidation';
 import {
     createRestoreConflictResponse,
@@ -157,18 +151,7 @@ export async function POST(request: NextRequest) {
         throw error;
     }
 
-    const remoteBackup = await syncCurrentBackupToRemote({
-        reason: 'local-restore',
-        writeSnapshot: true,
-    });
-    if (shouldQueueRemoteBackupRetry(remoteBackup)) {
-        await queueCurrentBackupToRemote({
-            reason: 'local-restore',
-            writeSnapshot: true,
-        });
-    }
     invalidatePublicContentCache('local-restore');
-    const queueSnapshot = await getRemoteBackupQueueSnapshot();
 
     return NextResponse.json({
         success: true,
@@ -178,7 +161,5 @@ export async function POST(request: NextRequest) {
             settings: result.settings,
             media: result.media,
         },
-        remoteBackup,
-        ...queueSnapshot,
     });
 }

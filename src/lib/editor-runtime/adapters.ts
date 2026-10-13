@@ -136,7 +136,7 @@ function readSelectedInputs(
 }
 
 /** Local managed media must still hash to the value frozen into the candidate. */
-export function verifyMediaHashes(snapshot: SiteSnapshot): boolean {
+function verifyMediaHashes(snapshot: SiteSnapshot): boolean {
     const manifest = readEditorMediaManifest();
     const byPath = new Map(manifest.assets.map((asset) => [asset.path, asset]));
     for (const ref of snapshot.media) {
@@ -317,21 +317,5 @@ export function listEditorReleases(): ReleaseRecord[] {
         });
 }
 
-
-export function listRecordedBackupProofs(): BackupProof[] {
-    const directory = path.join(getRuntimeDataRootPath(), 'workflow', 'backup-proofs');
-    if (!fs.existsSync(directory)) return [];
-    return fs.readdirSync(directory)
-        .filter((name) => name.endsWith('.json'))
-        .flatMap((name) => {
-            try {
-                const proof = JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')) as BackupProof;
-                return typeof proof.snapshotId === 'string' ? [proof] : [];
-            } catch {
-                return [];
-            }
-        })
-        .sort((left, right) => right.verifiedAt.localeCompare(left.verifiedAt));
-}
 
 export { readEditorMediaFile };

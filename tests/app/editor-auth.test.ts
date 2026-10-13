@@ -965,7 +965,7 @@ describe('editor API session guard', () => {
 
 describe('safe editor next path', () => {
   it('keeps editor-local paths and rejects external destinations', () => {
-    expect(getSafeEditorNextPath('/editor/settings?tab=r2')).toBe('/editor/settings?tab=r2');
+    expect(getSafeEditorNextPath('/editor/settings?section=general')).toBe('/editor/settings?section=general');
     expect(getSafeEditorNextPath('/navigation')).toBe('/editor');
     expect(getSafeEditorNextPath('https://example.com/editor')).toBe('/editor');
     expect(getSafeEditorNextPath('//example.com/editor')).toBe('/editor');

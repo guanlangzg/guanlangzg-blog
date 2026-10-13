@@ -14,12 +14,12 @@ export class ReleaseRetryError extends Error {
   }
 }
 
-export interface RetryInputs {
+interface RetryInputs {
   selectedRevision: string;
   baseLiveReleaseId: string | null;
 }
 
-export interface RetryTransaction {
+interface RetryTransaction {
   readRelease(releaseId: string): { release: ReleaseRecord; snapshot: SiteSnapshot };
   writeRelease(release: ReleaseRecord, snapshot: SiteSnapshot): void;
   readLiveReleaseId(): string | null;

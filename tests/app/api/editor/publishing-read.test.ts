@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({ session: vi.fn(), records: vi.fn(), jobs: vi.f
 vi.mock('@/lib/editor-api-auth', () => ({ ensureEditorSession: mocks.session }));
 vi.mock('@/lib/editor-runtime/adapters', () => ({ listEditorReleases: mocks.records, readDraftSnapshot: mocks.inputs, readDraftResourceRevisions: mocks.revisions }));
 vi.mock('@/lib/jobs/store', () => ({ listJobs: mocks.jobs }));
-vi.mock('@/lib/publishing/store', () => ({ parseStoredRelease: (value: unknown) => value }));
 vi.mock('@/lib/editor-data-storage', () => ({ getEditorDataResourceManifest: (_name: string, value: unknown) => ({ revision: `rev-${JSON.stringify(value).length}`, hash: 'test' }) }));
 
 import { GET as getReleases } from '@/app/api/editor/releases/route';

@@ -34,31 +34,15 @@ import {
     getEditorAuthRateLimitResponse,
     recordEditorAuthFailure,
 } from '@/lib/editor-auth-rate-limit';
-import {
-    getEditableR2BackupSettings,
-    getR2BackupStatus,
-    saveEditableR2BackupSettings,
-    type EditableR2BackupSettings,
-} from '@/lib/r2-backup-storage';
-import {
-    CloudflareR2BootstrapError,
-    bootstrapCloudflareR2Settings,
-    type CloudflareR2BootstrapInput,
-} from '@/lib/cloudflare-r2-bootstrap';
 import { withRuntimeDataRootLock } from '@/lib/runtime-data-lock';
 import { setEditorSessionCookies } from '@/lib/editor-session-response';
 import { isApplicationSetupComplete } from '@/lib/setup-state';
-
-type R2SetupMode = 'disabled' | 'manual' | 'cloudflare';
 
 type SetupRequestBody = {
     config?: Partial<Record<keyof EditableAppRuntimeConfig, unknown>>;
     editorSecret?: unknown;
     confirmEditorSecret?: unknown;
     setupToken?: unknown;
-    r2SetupMode?: unknown;
-    r2Settings?: Partial<Record<keyof EditableR2BackupSettings, unknown>>;
-    cloudflareR2Setup?: Partial<Record<keyof CloudflareR2BootstrapInput, unknown>>;
 };
 
 function asString(value: unknown): string {
@@ -116,59 +100,6 @@ function validateRuntimeConfigBeforeExternalSetup(config: EditableAppRuntimeConf
     return null;
 }
 
-function parseR2SetupMode(value: unknown, r2Settings: SetupRequestBody['r2Settings']): R2SetupMode {
-    if (value === 'disabled' || value === 'manual' || value === 'cloudflare') {
-        return value;
-    }
-
-    return r2Settings?.enabled === true ? 'manual' : 'disabled';
-}
-
-function createDisabledR2Settings(value: SetupRequestBody['r2Settings']): EditableR2BackupSettings {
-    return {
-        enabled: false,
-        accountId: asString(value?.accountId),
-        bucket: asString(value?.bucket),
-        accessKeyId: '',
-        secretAccessKey: '',
-        prefix: asString(value?.prefix) || 'blog-navigation',
-        endpoint: asString(value?.endpoint),
-        snapshotOnWrite: value?.snapshotOnWrite === true,
-    };
-}
-
-function parseCloudflareR2Setup(value: SetupRequestBody['cloudflareR2Setup']): CloudflareR2BootstrapInput | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return null;
-    }
-
-    return {
-        authEmail: asString(value.authEmail),
-        globalApiKey: asString(value.globalApiKey),
-        accountId: asString(value.accountId),
-        bucket: asString(value.bucket),
-        prefix: asString(value.prefix),
-        snapshotOnWrite: value.snapshotOnWrite === true,
-    };
-}
-
-function parseR2Settings(value: SetupRequestBody['r2Settings']): EditableR2BackupSettings | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return null;
-    }
-
-    return {
-        enabled: value.enabled === true,
-        accountId: asString(value.accountId),
-        bucket: asString(value.bucket),
-        accessKeyId: asString(value.accessKeyId),
-        secretAccessKey: asString(value.secretAccessKey),
-        prefix: asString(value.prefix),
-        endpoint: asString(value.endpoint),
-        snapshotOnWrite: value.snapshotOnWrite === true,
-    };
-}
-
 function createInvalidRuntimeConfigResponse(error: unknown): NextResponse | null {
     if (!(error instanceof AppRuntimeConfigInvalidError)) {
         return null;
@@ -223,8 +154,6 @@ export async function GET(request: NextRequest) {
             setupTokenRequired: isRuntimeEditorAuthSetupTokenRequired(),
             config: getSafeAppRuntimeConfig(),
             editable: getEditableAppRuntimeConfig(),
-            r2Settings: getEditableR2BackupSettings(),
-            r2Status: getR2BackupStatus(),
         });
     } catch (error) {
         const unavailableResponse = createEditorDataRootUnavailableResponse(error);
@@ -265,13 +194,6 @@ export async function PUT(request: NextRequest) {
     }
 
     const config = parseRuntimeConfig(body?.config);
-    const r2SetupMode = parseR2SetupMode(body?.r2SetupMode, body?.r2Settings);
-    const r2Settings = r2SetupMode === 'manual'
-        ? parseR2Settings(body?.r2Settings)
-        : createDisabledR2Settings(body?.r2Settings);
-    const cloudflareR2Setup = r2SetupMode === 'cloudflare'
-        ? parseCloudflareR2Setup(body?.cloudflareR2Setup)
-        : null;
     const editorSecret = asString(body?.editorSecret).trim();
     const confirmEditorSecret = asString(body?.confirmEditorSecret).trim();
     const setupToken = asString(body?.setupToken);
@@ -286,7 +208,7 @@ export async function PUT(request: NextRequest) {
         }
     }
 
-    if (!config || !r2Settings || (r2SetupMode === 'cloudflare' && !cloudflareR2Setup)) {
+    if (!config) {
         return NextResponse.json(
             {
                 message: '初始化配置格式无效。',
@@ -384,12 +306,6 @@ export async function PUT(request: NextRequest) {
                 };
             }
 
-            if (r2SetupMode === 'cloudflare') {
-                await bootstrapCloudflareR2Settings(cloudflareR2Setup as CloudflareR2BootstrapInput);
-            } else {
-                saveEditableR2BackupSettings(r2Settings);
-            }
-
             let sessionValue: string | null = null;
 
             if (editorSecret) {
@@ -449,13 +365,6 @@ export async function PUT(request: NextRequest) {
                     message: '编辑口令不符合安全要求。',
                 },
                 { status: 400 }
-            );
-        }
-
-        if (error instanceof CloudflareR2BootstrapError) {
-            return NextResponse.json(
-                { message: error.message },
-                { status: error.statusCode }
             );
         }
 

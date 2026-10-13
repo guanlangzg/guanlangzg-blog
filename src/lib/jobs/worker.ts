@@ -20,6 +20,7 @@ export interface JobHandlerResult {
 }
 
 export type JobHandler = (job: JobRecord) => Promise<void | JobHandlerResult>;
+/** @public Used by the startup worker's dynamic module registry. */
 export type JobHandlers = Partial<Record<JobType, JobHandler>>;
 
 export interface WorkerOptions {

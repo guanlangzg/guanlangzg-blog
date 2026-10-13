@@ -19,7 +19,7 @@ function warnAboutSpoofableClientId(reason: string): void {
     );
 }
 
-export function getTrustedProxyIps(): Set<string> | null {
+function getTrustedProxyIps(): Set<string> | null {
     const configuredIps = getRuntimeTrustedProxyIps();
 
     if (configuredIps.length === 0) {
@@ -30,9 +30,7 @@ export function getTrustedProxyIps(): Set<string> | null {
 }
 
 const CLIENT_IP_HEADERS = [
-    'cf-connecting-ip',
     'x-real-ip',
-    'true-client-ip',
 ];
 
 function normalizeClientPart(value: string | null): string | null {

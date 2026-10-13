@@ -75,7 +75,7 @@ export function MediaStoragePanel() {
                 媒体存储
             </div>
             <p className="mt-2 text-sm leading-6 text-muted">
-                清理不再被文章或导航引用的媒体文件。此操作不可撤销，执行前请确认已启用 R2 备份。
+                清理不再被文章或导航引用的媒体文件。此操作不可撤销，执行前请确认这些文件已不再需要。
             </p>
             {message ? (
                 <div className="mt-3">

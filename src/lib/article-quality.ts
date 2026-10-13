@@ -187,7 +187,7 @@ export function createMarkdownHeadingId(text: string): string {
     return encodeURIComponent(getRenderedHeadingText(text) || 'section');
 }
 
-export function createMarkdownHeadingIdAllocator(): (text: string) => string {
+function createMarkdownHeadingIdAllocator(): (text: string) => string {
     const counts = new Map<string, number>();
 
     return (text: string) => {

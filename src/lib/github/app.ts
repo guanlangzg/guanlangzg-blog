@@ -141,5 +141,3 @@ export class GitHubAppTokenManager implements GitHubTokenProvider {
     return parseInstallationToken(await response.json() as unknown);
   }
 }
-
-export const githubAppTokenScopes = OPERATION_SCOPES;

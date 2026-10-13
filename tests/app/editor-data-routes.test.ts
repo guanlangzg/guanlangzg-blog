@@ -6,7 +6,6 @@ import { GET as getArticles, PATCH as patchArticles, PUT as putArticles } from '
 import { GET as getNavigation, PUT as putNavigation } from '@/app/api/data/navigation/route';
 import { GET as getSettings, PUT as putSettings } from '@/app/api/data/settings/route';
 import { EDITOR_JSON_BODY_LIMIT_BYTES } from '@/lib/api-json-body';
-import { queueCurrentBackupToRemote } from '@/lib/editor-remote-backup';
 import { writeArticlesToDisk } from '@/lib/editor-data-storage';
 import { EDITOR_CSRF_HEADER } from '@/lib/editor-auth';
 import { resetEnvironmentEditorSessionForTests } from '@/lib/editor-auth-runtime';
@@ -19,15 +18,10 @@ import {
   restoreEnv,
 } from '../helpers/api-route';
 
-vi.mock('@/lib/editor-remote-backup', () => ({
-  queueCurrentBackupToRemote: vi.fn(),
-}));
-
 vi.mock('@/lib/public-cache-invalidation', () => ({
   invalidatePublicContentCache: vi.fn(),
 }));
 
-const mockedQueueCurrentBackupToRemote = vi.mocked(queueCurrentBackupToRemote);
 const mockedInvalidatePublicContentCache = vi.mocked(invalidatePublicContentCache);
 const ORIGINAL_ENV = {
   BLOG_DATA_ROOT: process.env.BLOG_DATA_ROOT,
@@ -119,12 +113,6 @@ async function createAuthenticatedHeaders(url: string): Promise<Headers> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockedQueueCurrentBackupToRemote.mockResolvedValue({
-    queued: false,
-    enabled: false,
-    success: false,
-    message: 'R2 backup is disabled.',
-  });
 });
 
 afterEach(() => {
@@ -161,7 +149,6 @@ describe('editor data write APIs', () => {
         message: expect.stringContaining('校验失败'),
       })
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('rejects authenticated writes from a different origin', async () => {
@@ -186,7 +173,6 @@ describe('editor data write APIs', () => {
     }));
 
     expect(response.status).toBe(403);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('accepts authenticated writes from the trusted forwarded public origin', async () => {
@@ -214,7 +200,7 @@ describe('editor data write APIs', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledOnce();
+    expect(mockedInvalidatePublicContentCache).toHaveBeenCalledWith('articles-write');
   });
 
   it('rejects a PATCH upsert that duplicates another article slug', async () => {
@@ -248,7 +234,6 @@ describe('editor data write APIs', () => {
         message: expect.stringContaining('文章 slug 重复'),
       })
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
     // Reading the stored articles must still work: a duplicate slug would make
     // every later read path throw and take the whole site down.
     const stored = JSON.parse(fs.readFileSync(path.join(dataRoot, 'articles', 'articles.json'), 'utf8')) as unknown[];
@@ -345,7 +330,7 @@ describe('editor data write APIs', () => {
     });
   });
 
-  it('rejects malformed article JSON without writing or remote sync', async () => {
+  it('rejects malformed article JSON without writing data', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -371,10 +356,9 @@ describe('editor data write APIs', () => {
     expect(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'articles', 'articles.json'), 'utf8')).toBe(
       existingArticles
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
-  it('rejects oversized article write bodies before parsing or remote sync', async () => {
+  it('rejects oversized article write bodies before parsing or writing data', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -402,7 +386,6 @@ describe('editor data write APIs', () => {
     expect(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'articles', 'articles.json'), 'utf8')).toBe(
       existingArticles
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('requires the current revision before writing articles', async () => {
@@ -420,7 +403,6 @@ describe('editor data write APIs', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'articles', 'articles.json'), 'utf8'))).toEqual([
       expect.objectContaining({
         id: 'article-1',
@@ -428,7 +410,7 @@ describe('editor data write APIs', () => {
     ]);
   });
 
-  it('writes articles and triggers remote sync when the revision matches', async () => {
+  it('writes articles when the revision matches and invalidates the public cache', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -445,9 +427,6 @@ describe('editor data write APIs', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledWith({
-      reason: 'articles-write',
-    });
     expect(mockedInvalidatePublicContentCache).toHaveBeenCalledWith('articles-write');
   });
 
@@ -476,7 +455,6 @@ describe('editor data write APIs', () => {
     expect(JSON.parse(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'articles', 'articles.json'), 'utf8'))).toEqual([
       expect.objectContaining({ id: 'article-1', title: 'Updated Article' }),
     ]);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledWith({ reason: 'articles-patch' });
     expect(mockedInvalidatePublicContentCache).toHaveBeenCalledWith('articles-patch');
   });
 
@@ -497,7 +475,7 @@ describe('editor data write APIs', () => {
     expect(JSON.parse(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'articles', 'articles.json'), 'utf8'))).toEqual([]);
   });
 
-  it('returns a specific article validation error without writing or remote sync', async () => {
+  it('returns a specific article validation error without writing data', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -535,7 +513,6 @@ describe('editor data write APIs', () => {
     expect(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'articles', 'articles.json'), 'utf8')).toBe(
       existingArticles
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('returns a structured 503 when the runtime data root path is unavailable for writes', async () => {
@@ -584,7 +561,6 @@ describe('editor data write APIs', () => {
       });
     }
 
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('returns a structured 503 when backup bookkeeping is damaged', async () => {
@@ -610,7 +586,6 @@ describe('editor data write APIs', () => {
 
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ code: 'backup_state_invalid' });
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('marks routes non-persistent when the runtime data root path is unavailable for reads', async () => {
@@ -682,10 +657,9 @@ describe('editor data write APIs', () => {
         id: 'article-newer',
       }),
     ]);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid navigation payloads without writing or remote sync', async () => {
+  it('rejects invalid navigation payloads without writing data', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -729,7 +703,6 @@ describe('editor data write APIs', () => {
     expect(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'navigation', 'tools.json'), 'utf8')).toBe(
       existingNavigation
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('requires the current revision before writing navigation', async () => {
@@ -754,11 +727,10 @@ describe('editor data write APIs', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'navigation', 'tools.json'), 'utf8'))).toEqual([]);
   });
 
-  it('writes navigation and triggers remote sync when the revision matches', async () => {
+  it('writes navigation when the revision matches and invalidates the public cache', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -782,13 +754,10 @@ describe('editor data write APIs', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledWith({
-      reason: 'navigation-write',
-    });
     expect(mockedInvalidatePublicContentCache).toHaveBeenCalledWith('navigation-write');
   });
 
-  it('rejects invalid settings payloads without writing or remote sync', async () => {
+  it('rejects invalid settings payloads without writing data', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -819,7 +788,6 @@ describe('editor data write APIs', () => {
     expect(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'settings', 'site.json'), 'utf8')).toBe(
       existingSettings
     );
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('requires the current revision before writing settings', async () => {
@@ -837,7 +805,6 @@ describe('editor data write APIs', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'settings', 'site.json'), 'utf8'))).toEqual(
       expect.objectContaining({
         siteName: 'Original Site',
@@ -845,7 +812,7 @@ describe('editor data write APIs', () => {
     );
   });
 
-  it('writes settings and triggers remote sync when the revision matches', async () => {
+  it('writes settings when the revision matches and invalidates the public cache', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -862,9 +829,6 @@ describe('editor data write APIs', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledWith({
-      reason: 'settings-write',
-    });
     expect(mockedInvalidatePublicContentCache).toHaveBeenCalledWith('settings-write');
   });
 });

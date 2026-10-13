@@ -174,6 +174,7 @@ function parseRuntimeEditorAuthConfig(value: unknown, filePath: string): Runtime
     };
 }
 
+/** @public Loaded dynamically by the admin:init CLI. */
 export function getRuntimeEditorAuthConfigFilePath(): string {
     const configuredPath = process.env.EDITOR_AUTH_CONFIG_FILE?.trim();
 
@@ -531,7 +532,7 @@ export function resetEnvironmentEditorSessionForTests(): void {
     getEnvironmentEditorSessionGlobalState().state = null;
 }
 
-export function getRuntimeEditorAuthSetupToken(): string | null {
+function getRuntimeEditorAuthSetupToken(): string | null {
     const token = process.env.EDITOR_RUNTIME_AUTH_SETUP_TOKEN?.trim();
     return token ? token : null;
 }

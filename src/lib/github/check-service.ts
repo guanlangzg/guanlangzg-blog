@@ -4,9 +4,9 @@ import { readGitHubConnection, saveGitHubConnection, type GitHubConnectionStatus
 import { loadGitHubPrivateKey } from '@/lib/github/secrets';
 import type { JobHandler } from '@/lib/jobs/worker';
 
-export type GitHubCheckFailure = Extract<GitHubConnectionStatus, 'permission_error' | 'private_required' | 'network_error' | 'installation_revoked'>;
+type GitHubCheckFailure = Extract<GitHubConnectionStatus, 'permission_error' | 'private_required' | 'network_error' | 'installation_revoked'>;
 
-export interface GitHubCheckOptions {
+interface GitHubCheckOptions {
   fetch?: typeof fetch;
   now?: () => number;
 }
@@ -25,7 +25,7 @@ function assertPrivate(role: string, value: { private: boolean }): void {
   if (!value.private) throw new Error(`GitHub ${role} repository must be private.`);
 }
 
-export async function checkPendingGitHubConnection(expectedRevision?: string, options: GitHubCheckOptions = {}): Promise<void> {
+async function checkPendingGitHubConnection(expectedRevision?: string, options: GitHubCheckOptions = {}): Promise<void> {
   const connection = await readGitHubConnection();
   if (!connection || connection.status !== 'pending') throw new Error('GitHub connection is not pending.');
   if (expectedRevision && connection.revision !== expectedRevision) return;
@@ -66,6 +66,7 @@ export async function checkPendingGitHubConnection(expectedRevision?: string, op
   }
 }
 
+/** @public Loaded by name from the startup worker registry. */
 export function createGitHubCheckJobHandler(): JobHandler {
   return async (job) => {
     if (!job.input || typeof job.input !== 'object' || Array.isArray(job.input)) {

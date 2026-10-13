@@ -72,24 +72,24 @@ describe('editor middleware', () => {
   });
 
   it('redirects unauthenticated editor requests to login with a safe next path', () => {
-    const response = middleware(createEditorRequest('/editor/settings?tab=r2'));
+    const response = middleware(createEditorRequest('/editor/settings?section=general'));
     const location = response.headers.get('location');
 
     expect(response.status).toBe(307);
-    expect(location).toBe('http://localhost/editor/login?next=%2Feditor%2Fsettings%3Ftab%3Dr2');
+    expect(location).toBe('http://localhost/editor/login?next=%2Feditor%2Fsettings%3Fsection%3Dgeneral');
     expect(response.headers.get('Content-Security-Policy')).toContain("script-src 'self' 'nonce-");
   });
 
   it('redirects unauthenticated editor requests to the public host header', () => {
     const response = middleware(createEditorRequest(
-      '/editor/settings?tab=r2',
+      '/editor/settings?section=general',
       undefined,
       { Host: 'public.example.com' }
     ));
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe(
-      'http://public.example.com/editor/login?next=%2Feditor%2Fsettings%3Ftab%3Dr2'
+      'http://public.example.com/editor/login?next=%2Feditor%2Fsettings%3Fsection%3Dgeneral'
     );
   });
 
@@ -97,7 +97,7 @@ describe('editor middleware', () => {
     process.env.TRUSTED_PROXY_IPS = '203.0.113.1';
 
     const response = middleware(createEditorRequest(
-      '/editor/settings?tab=r2',
+      '/editor/settings?section=general',
       undefined,
       {
         Host: 'localhost:3000',
@@ -108,7 +108,7 @@ describe('editor middleware', () => {
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe(
-      'https://public.example.com/editor/login?next=%2Feditor%2Fsettings%3Ftab%3Dr2'
+      'https://public.example.com/editor/login?next=%2Feditor%2Fsettings%3Fsection%3Dgeneral'
     );
   });
 
@@ -148,7 +148,7 @@ describe('editor middleware', () => {
     expect(response.status).toBe(200);
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self' 'nonce-");
-    expect(csp).toContain('https://static.cloudflareinsights.com');
+    expect(csp).not.toContain('cloudflare');
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline'");
   });

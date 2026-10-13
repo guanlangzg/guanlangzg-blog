@@ -31,7 +31,6 @@ import {
     readEditorMediaFile,
     readEditorMediaManifest,
     writeRestoredEditorMediaManifest,
-    type EditorMediaAsset,
     type EditorMediaManifest,
 } from '@/lib/editor-media-storage';
 import { isEncryptedBackupPayload } from '@/lib/backup-encryption';
@@ -39,14 +38,12 @@ import { isRuntimeDataRootWritableSync } from '@/lib/runtime-data-root';
 
 export const EDITOR_BACKUP_VERSION = 1;
 
-export type EditorBackupSource = 'local' | 'r2';
-
-export interface EditorBackupMediaInlineFile {
+interface EditorBackupMediaInlineFile {
     path: string;
     bytes: Uint8Array;
 }
 
-export interface EditorBackupMediaData {
+interface EditorBackupMediaData {
     manifest: EditorMediaManifest;
     files?: EditorBackupMediaInlineFile[];
     readFile?: (path: string) => Promise<Uint8Array>;
@@ -69,7 +66,7 @@ type EditorBackupPayloadMedia = {
     files?: EditorBackupPayloadMediaFile[];
 };
 
-export interface EditorBackupPayloadData {
+interface EditorBackupPayloadData {
     articles: Article[];
     navigation: Category[];
     settings: SiteSettings;
@@ -80,21 +77,11 @@ export interface EditorBackupPayload {
     version: typeof EDITOR_BACKUP_VERSION;
     schemaVersion?: typeof EDITOR_DATA_SCHEMA_VERSION;
     exportedAt: string;
-    source: EditorBackupSource;
+    source: 'local';
     persistent: boolean;
     dataRoot: string | null;
     manifest?: EditorDataManifest;
     data: EditorBackupPayloadData;
-}
-
-export interface EditorRemoteBackupMediaAsset {
-    asset: EditorMediaAsset;
-    bytes: Uint8Array;
-}
-
-export interface CurrentEditorRemoteBackupPackage {
-    payload: EditorBackupPayload;
-    mediaAssets: EditorRemoteBackupMediaAsset[];
 }
 
 export interface RestoreBackupResult {
@@ -108,11 +95,6 @@ interface RestoreBackupOptions {
     currentManifest?: EditorBackupRestorePrecondition;
     requireInlineMediaFiles?: boolean;
 }
-
-export type EditorDataManifestSnapshotReference = {
-    manifest: EditorDataManifest;
-    manifestHash: string;
-};
 
 export interface EditorBackupRestorePrecondition {
     manifest: EditorDataManifest;
@@ -264,52 +246,6 @@ function isSameManifestSnapshot(expected: EditorDataManifest, current: EditorDat
     return true;
 }
 
-function stableStringify(value: unknown): string {
-    if (Array.isArray(value)) {
-        return `[${value.map((item) => stableStringify(item)).join(',')}]`;
-    }
-
-    if (value && typeof value === 'object') {
-        return `{${Object.keys(value).sort().map((key) => {
-            const record = value as Record<string, unknown>;
-
-            return `${JSON.stringify(key)}:${stableStringify(record[key])}`;
-        }).join(',')}}`;
-    }
-
-    return JSON.stringify(value);
-}
-
-export function createEditorDataManifestHash(manifest: EditorDataManifest): string {
-    const resourceHashes = {
-        articles: manifest.resources.articles?.hash ?? null,
-        navigation: manifest.resources.navigation?.hash ?? null,
-        settings: manifest.resources.settings?.hash ?? null,
-    };
-
-    return createHash('sha256')
-        .update(stableStringify({
-            version: manifest.version,
-            resources: resourceHashes,
-        }))
-        .digest('hex');
-}
-
-export function createCurrentEditorManifestSnapshotReference(data?: EditorBackupData): EditorDataManifestSnapshotReference {
-    const manifest = data
-        ? createEditorDataManifestSnapshot(data)
-        : createCurrentEditorManifestSnapshot();
-
-    return {
-        manifest,
-        manifestHash: createEditorDataManifestHash(manifest),
-    };
-}
-
-export function isSameEditorManifestSnapshot(expected: EditorDataManifest, current: EditorDataManifest): boolean {
-    return isSameManifestSnapshot(expected, current);
-}
-
 function createCurrentEditorBackupRestorePrecondition(): EditorBackupRestorePrecondition {
     return {
         manifest: createCurrentEditorManifestSnapshot(),
@@ -330,13 +266,6 @@ function assertCurrentManifestForRestore(
     if (options.includeMedia && expected.mediaHash !== undefined && expected.mediaHash !== currentState.mediaHash) {
         throw new EditorBackupRestoreConflictError(currentState);
     }
-}
-
-export function assertEditorBackupRestoreCurrentManifest(
-    expected: EditorBackupRestorePrecondition,
-    options: { includeMedia?: boolean } = {}
-): void {
-    return assertCurrentManifestForRestore(expected, options);
 }
 
 export function createCurrentEditorBackupRestorePreconditionReference(): EditorBackupRestorePrecondition {
@@ -375,17 +304,14 @@ function serializeEditorBackupMedia(
     };
 }
 
-export function createEditorBackupPayload(
-    data: EditorBackupData,
-    source: EditorBackupSource = 'local'
-): EditorBackupPayload {
+export function createEditorBackupPayload(data: EditorBackupData): EditorBackupPayload {
     const dataRoot = getEditorDataRoot();
 
     return {
         version: EDITOR_BACKUP_VERSION,
         schemaVersion: EDITOR_DATA_SCHEMA_VERSION,
         exportedAt: new Date().toISOString(),
-        source,
+        source: 'local',
         persistent: Boolean(dataRoot && isRuntimeDataRootWritableSync(dataRoot)),
         dataRoot,
         manifest: createBackupPayloadManifest(data),
@@ -405,40 +331,6 @@ export async function createCurrentEditorBackupPayload(options: {
         return createEditorBackupPayload(
             await readCurrentEditorBackupDataWithMedia(options)
         );
-    });
-}
-
-export async function createCurrentEditorRemoteBackupPackage(): Promise<CurrentEditorRemoteBackupPackage> {
-    return withEditorDataRootLock(async () => {
-        const data = await readCurrentEditorBackupDataWithMedia({
-            includeInlineMediaFiles: true,
-        });
-        const assetsByPath = new Map(data.media?.manifest.assets.map((asset) => [asset.path, asset]) ?? []);
-        const mediaAssets = (data.media?.files ?? []).map((file) => {
-            const asset = assetsByPath.get(file.path);
-
-            if (!asset) {
-                throw new Error(`Missing media asset metadata for backup: ${file.path}`);
-            }
-
-            return {
-                asset,
-                bytes: file.bytes,
-            };
-        });
-        const payloadData: EditorBackupData = data.media
-            ? {
-                ...data,
-                media: {
-                    manifest: data.media.manifest,
-                },
-            }
-            : data;
-
-        return {
-            payload: createEditorBackupPayload(payloadData, 'r2'),
-            mediaAssets,
-        };
     });
 }
 
@@ -588,10 +480,9 @@ function wrapEditorBackupParseError<T>(parse: () => T, fallbackMessage: string):
 }
 
 /**
- * A payload carries the manifest its own data was hashed into. Verifying that manifest is the
- * only integrity signal a local or legacy R2 payload has, so a mismatch must fail before the
- * restore transaction starts. Raw payload values are hashed (not the normalized ones) because
- * that is what the writer hashed, which keeps backups written before field normalization valid.
+ * A payload carries the manifest its own data was hashed into. A mismatch must fail before
+ * the restore transaction starts. Raw payload values are hashed (not the normalized ones)
+ * because that is what the writer hashed, which keeps older backups valid.
  */
 function assertEditorBackupManifestMatchesData(
     payload: Record<string, unknown>,
@@ -711,13 +602,6 @@ async function restoreParsedEditorBackupData(
             media: data.media?.manifest.assets.length ?? 0,
         };
     });
-}
-
-export async function restoreEditorBackupData(
-    data: EditorBackupData,
-    options: RestoreBackupOptions = {}
-): Promise<RestoreBackupResult> {
-    return restoreParsedEditorBackupData(data, options);
 }
 
 export async function restoreEditorBackupPayload(

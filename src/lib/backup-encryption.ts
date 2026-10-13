@@ -1,8 +1,5 @@
-// IMPORTANT: This module provides AES-256-GCM encryption for the GitHub
-// encrypted-backup toolchain ONLY (scripts/data/encrypted-backup.mjs and
-// restore-encrypted-backup.mjs). It MUST NOT be used by the R2 automatic
-// backup pipeline. Per AGENTS.md, R2 backups must remain plaintext JSON so
-// they can be JSON.parse'd directly for inspection, migration, and restore.
+// This module provides AES-256-GCM encryption for the encrypted backup
+// import/export scripts only; runtime backup payloads remain portable JSON.
 import {
     createCipheriv,
     createDecipheriv,

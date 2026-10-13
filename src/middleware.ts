@@ -25,8 +25,8 @@ function normalizeCspHeader(value: string): string {
 
 function createNonceContentSecurityPolicy(nonce: string): string {
     const scriptSrc = process.env.NODE_ENV === 'development'
-        ? `'self' 'nonce-${nonce}' 'unsafe-eval' ${THEME_INIT_SCRIPT_HASH} https://static.cloudflareinsights.com`
-        : `'self' 'nonce-${nonce}' ${THEME_INIT_SCRIPT_HASH} https://static.cloudflareinsights.com`;
+        ? `'self' 'nonce-${nonce}' 'unsafe-eval' ${THEME_INIT_SCRIPT_HASH}`
+        : `'self' 'nonce-${nonce}' ${THEME_INIT_SCRIPT_HASH}`;
 
     return normalizeCspHeader(`
         default-src 'self';
@@ -34,7 +34,7 @@ function createNonceContentSecurityPolicy(nonce: string): string {
         style-src 'self' 'unsafe-inline';
         img-src 'self' data: blob: https:;
         font-src 'self' data:;
-        connect-src 'self' https://cloudflareinsights.com;
+        connect-src 'self';
         frame-ancestors 'none';
         base-uri 'self';
         form-action 'self'

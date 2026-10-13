@@ -31,7 +31,6 @@ import { validateArticlePaths } from '@/lib/publishing/snapshot';
 import { readNavigationIdentities, writeNavigationIdentities } from '@/lib/publishing/store';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 import {
-  DEFAULT_SITE_SETTINGS,
   parseSiteSettingsOrThrow,
   SITE_SETTING_KEYS,
   type SiteSettings,
@@ -877,11 +876,3 @@ export async function applyRestorePlan(
 export async function readCurrentRestoreState(): Promise<{ data: RestorableEditorData; revision: string }> {
   return readCurrentData();
 }
-
-export function createRestorePayloadDecoder(input: {
-  decode(value: unknown): Promise<RestorableEditorData> | RestorableEditorData;
-}): (value: unknown) => Promise<RestorableEditorData> {
-  return async (value) => validateData(await input.decode(value));
-}
-
-export const RESTORE_SETTING_DEFAULTS: SiteSettings = { ...DEFAULT_SITE_SETTINGS };

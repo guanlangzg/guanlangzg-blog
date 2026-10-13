@@ -3,7 +3,6 @@ import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { GET as getArticles } from '@/app/api/data/articles/route';
-import { GET as getCloudflareR2 } from '@/app/api/data/cloudflare-r2/route';
 import { GET as getNavigation } from '@/app/api/data/navigation/route';
 import { GET as getSettings } from '@/app/api/data/settings/route';
 import {
@@ -47,10 +46,6 @@ async function expectPersistent(expected: boolean): Promise<void> {
     {
       url: 'http://localhost/api/data/settings',
       get: getSettings,
-    },
-    {
-      url: 'http://localhost/api/data/cloudflare-r2',
-      get: getCloudflareR2,
     },
     {
       url: 'http://localhost/api/data/articles',

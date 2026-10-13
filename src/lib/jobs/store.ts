@@ -10,9 +10,9 @@ import type { ReleaseRecord } from '@/lib/publishing/types';
 import { withRuntimeDataRootLock } from '@/lib/runtime-data-lock';
 import { sha256Hex, stableJsonStringify } from '@/lib/stable-json';
 
-export const JOB_TYPES = ['backup', 'build', 'publish', 'reconcile', 'restore', 'github-check'] as const;
+const JOB_TYPES = ['backup', 'build', 'publish', 'reconcile', 'restore', 'github-check'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
-export type JobStatus = 'pending' | 'retry' | 'running' | 'succeeded' | 'failed';
+type JobStatus = 'pending' | 'retry' | 'running' | 'succeeded' | 'failed';
 
 export interface JobRecord {
     id: string;
@@ -33,7 +33,7 @@ export interface JobRecord {
 export const BASE_RETRY_DELAY_MS = 1_000;
 export const MAX_RETRY_DELAY_MS = 5 * 60_000;
 export const MAX_JOB_ATTEMPTS = 11;
-export const DEFAULT_JOB_LEASE_MS = 2 * 60_000;
+const DEFAULT_JOB_LEASE_MS = 2 * 60_000;
 
 function jobsDirectory(root: string): string {
     return path.join(root, 'workflow', 'jobs');
@@ -517,7 +517,7 @@ export interface ClaimOptions {
     types?: readonly JobType[];
 }
 
-export function claimNextJobUnderLock(root: string, options: ClaimOptions = {}): JobRecord | null {
+function claimNextJobUnderLock(root: string, options: ClaimOptions = {}): JobRecord | null {
     const now = options.now ?? new Date();
     const nowMs = now.getTime();
     const leaseMs = options.leaseMs ?? DEFAULT_JOB_LEASE_MS;

@@ -7,7 +7,6 @@ import {
   EDITOR_BACKUP_VERSION,
   EditorBackupFormatError,
   createEditorBackupPayload,
-  createCurrentEditorRemoteBackupPackage,
   parseEditorBackupData,
   parseEditorBackupDataOrThrow,
   restoreEditorBackupPayload,
@@ -229,23 +228,6 @@ describe('editor backup payload', () => {
         ],
       },
     });
-  });
-
-  it('creates remote backup packages with manifest-only payload data and R2 source', async () => {
-    process.env.BLOG_DATA_ROOT = createTempDataRoot();
-    const storedMedia = await storeEditorMediaFile({
-      bytes: PNG_BYTES,
-      now: new Date('2026-06-19T00:00:00.000Z'),
-    });
-    const manifest = readEditorMediaManifest();
-
-    const backupPackage = await createCurrentEditorRemoteBackupPackage();
-
-    expect(backupPackage.payload.source).toBe('r2');
-    expect(backupPackage.payload.data.media).toEqual(manifest);
-    expect(backupPackage.mediaAssets).toHaveLength(1);
-    expect(backupPackage.mediaAssets[0]?.asset).toEqual(storedMedia.asset);
-    expect(new Uint8Array(backupPackage.mediaAssets[0]?.bytes ?? [])).toEqual(PNG_BYTES);
   });
 
   it('parses legacy envelope backup payloads without settings', () => {

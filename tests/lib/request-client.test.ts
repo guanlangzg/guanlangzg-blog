@@ -76,4 +76,11 @@ describe('trusted forwarded client identity', () => {
 
     expect(getRequestClientId(createRequest({ 'x-forwarded-for': '1.2.3.4, 203.0.113.7' }))).toBe('1.2.3.4');
   });
+
+  it('does not trust Cloudflare-specific client IP headers', () => {
+    configureTrustedProxies('*');
+
+    expect(getRequestClientId(createRequest({ 'cf-connecting-ip': '203.0.113.7' }))).toBe('unknown');
+    expect(getRequestClientId(createRequest({ 'true-client-ip': '203.0.113.7' }))).toBe('unknown');
+  });
 });

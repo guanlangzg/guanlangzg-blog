@@ -13,13 +13,6 @@ import {
     restoreEnv,
 } from '../helpers/api-route';
 
-vi.mock('@/lib/editor-remote-backup', () => ({
-    getRemoteBackupQueueSnapshot: () => ({ pending: 0, failed: 0 }),
-    queueCurrentBackupToRemote: vi.fn(),
-    shouldQueueRemoteBackupRetry: () => false,
-    syncCurrentBackupToRemote: vi.fn().mockResolvedValue({ enabled: false, skipped: true }),
-}));
-
 vi.mock('@/lib/public-cache-invalidation', () => ({
     invalidatePublicContentCache: vi.fn(),
 }));

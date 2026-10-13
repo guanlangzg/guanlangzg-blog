@@ -55,7 +55,7 @@ export class UnsupportedSchemaError extends Error {
   }
 }
 
-export class PublishingStoreValidationError extends Error {
+class PublishingStoreValidationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PublishingStoreValidationError';
@@ -324,15 +324,4 @@ export function readNavigationIdentities(): NavigationIdentityMap | null {
     throw new PublishingStoreValidationError('Stored navigation identity map is invalid.');
   }
   return identities;
-}
-
-export function parseStoredRelease(value: unknown): ReleaseRecord {
-  if (!validateRelease(value)) {
-    throw new PublishingStoreValidationError('Release record is invalid.');
-  }
-  return value;
-}
-
-export function isKnownReleaseStatus(value: unknown): value is ReleaseStatus {
-  return typeof value === 'string' && RELEASE_STATUSES.has(value as ReleaseStatus);
 }

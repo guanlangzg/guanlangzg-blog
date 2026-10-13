@@ -2,13 +2,13 @@ import { createHash } from 'node:crypto';
 import type { Category } from '@/app/types/navigation';
 import { stableJsonStringify } from '@/lib/stable-json';
 
-export interface NavigationToolIdentity {
+interface NavigationToolIdentity {
   id: string;
   normalizedUrl: string;
   groupOrder: number;
 }
 
-export interface NavigationCategoryIdentity {
+interface NavigationCategoryIdentity {
   id: string;
   slug: string;
   tools: NavigationToolIdentity[];
@@ -19,7 +19,7 @@ export interface NavigationIdentityMap {
   categories: NavigationCategoryIdentity[];
 }
 
-export interface AmbiguousNavigationMatch {
+interface AmbiguousNavigationMatch {
   categorySlug: string;
   normalizedUrl: string;
   candidateIds: string[];

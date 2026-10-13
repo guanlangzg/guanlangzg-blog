@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export function fsyncFile(filePath: string): void {
+function fsyncFile(filePath: string): void {
     const fileDescriptor = fs.openSync(filePath, 'r+');
 
     try {

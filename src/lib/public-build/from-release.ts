@@ -2,7 +2,7 @@ import type { Article } from '@/app/types/article';
 import type { SiteSnapshot } from '@/lib/publishing/types';
 import type { PublicManagedMedia, PublicSiteSnapshot } from '@/public-site/types';
 
-export type PublicReleaseMedia = PublicManagedMedia;
+type PublicReleaseMedia = PublicManagedMedia;
 
 export type PublicReleaseSnapshot = PublicSiteSnapshot & {
   media: PublicReleaseMedia[];

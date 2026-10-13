@@ -20,7 +20,7 @@ def verify_page(browser, viewport, screenshot_name: str) -> None:
     expect(page.get_by_role("button", name="退出")).to_be_visible()
     expect(page.get_by_role("button", name="备份数据")).to_be_visible()
     expect(page.get_by_role("button", name="恢复数据")).to_be_visible()
-    expect(page.get_by_text("R2 未配置完整，云端同步和云端恢复暂不可用。")).to_be_visible()
+    expect(page.get_by_role("link", name="GitHub 备份与恢复")).to_be_visible()
     assert_no_horizontal_overflow(page)
 
     if viewport["width"] < 640:
