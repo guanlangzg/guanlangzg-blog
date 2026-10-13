@@ -19,7 +19,7 @@ export interface PublicLiveSnapshot {
     media: SiteSnapshot['media'];
 }
 
-export function toPublicLiveSnapshot(snapshot: SiteSnapshot, releaseId: string): PublicLiveSnapshot {
+function toPublicLiveSnapshot(snapshot: SiteSnapshot, releaseId: string): PublicLiveSnapshot {
     return {
         releaseId,
         articles: structuredClone(snapshot.articles),

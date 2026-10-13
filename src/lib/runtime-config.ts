@@ -3,7 +3,7 @@ import path from 'node:path';
 const DEFAULT_DATA_ROOT_DIRECTORY_NAME = 'data';
 const DOCKER_DATA_ROOT = '/var/lib/blog-navigation';
 
-export type RuntimeConfigSource = 'env' | 'default';
+type RuntimeConfigSource = 'env' | 'default';
 
 export interface RuntimeDataRoot {
     path: string;

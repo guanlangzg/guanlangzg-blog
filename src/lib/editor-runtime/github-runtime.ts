@@ -2,7 +2,7 @@ import { GitHubRestClient } from '@/lib/github/client';
 import { GitHubAppTokenManager } from '@/lib/github/app';
 import { readGitHubConnection, type GitHubRepositoryReference } from '@/lib/github/config';
 
-export interface PublishingWorkflowRun {
+interface PublishingWorkflowRun {
     id: number;
     branch: string;
     workflow: string;
@@ -12,7 +12,7 @@ export interface PublishingWorkflowRun {
     headSha: string;
 }
 
-export interface PublishingDeploymentAttempt {
+interface PublishingDeploymentAttempt {
     runId: number;
     runAttempt: number;
     branch: string;

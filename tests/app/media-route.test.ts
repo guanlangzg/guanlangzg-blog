@@ -12,7 +12,6 @@ import { computeCandidateDigest } from '@/lib/publishing/snapshot';
 import { writeLivePointer, writeRelease } from '@/lib/publishing/store';
 import type { SiteSnapshot } from '@/lib/publishing/types';
 import { EDITOR_MEDIA_MAX_IMAGE_BYTES } from '@/lib/editor-media-storage';
-import { queueCurrentBackupToRemote } from '@/lib/editor-remote-backup';
 import {
   cleanupTempDirectories,
   createAuthedEditorRequest,
@@ -20,11 +19,6 @@ import {
   restoreEnv,
 } from '../helpers/api-route';
 
-vi.mock('@/lib/editor-remote-backup', () => ({
-  queueCurrentBackupToRemote: vi.fn(),
-}));
-
-const mockedQueueCurrentBackupToRemote = vi.mocked(queueCurrentBackupToRemote);
 const ORIGINAL_ENV = {
   NODE_ENV: process.env.NODE_ENV,
   BLOG_NAVIGATION_DOCKER: process.env.BLOG_NAVIGATION_DOCKER,
@@ -120,12 +114,6 @@ async function createAuthenticatedHeaders(): Promise<Headers> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockedQueueCurrentBackupToRemote.mockResolvedValue({
-    queued: false,
-    enabled: false,
-    success: false,
-    message: 'R2 backup is disabled.',
-  });
 });
 
 afterEach(() => {
@@ -168,7 +156,6 @@ describe('media API', () => {
     }));
 
     expect(response.status).toBe(401);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('serves an upload anonymously only after a live release references it', async () => {
@@ -352,10 +339,6 @@ describe('media API', () => {
     expect(fileResponse.headers.get('content-type')).toBe('image/png');
     expect(fileResponse.headers.get('cache-control')).toBe('private, no-store');
     expect(new Uint8Array(await fileResponse.arrayBuffer())).toEqual(PNG_BYTES);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledWith({
-      reason: 'media-write',
-      writeSnapshot: false,
-    });
   });
 
   it('rejects non-image uploads before writing files', async () => {
@@ -401,7 +384,6 @@ describe('media API', () => {
       })
     );
     expect(fs.existsSync(path.join(process.env.BLOG_DATA_ROOT, 'media'))).toBe(false);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('reports a blocked runtime data root instead of returning a raw upload failure', async () => {
@@ -428,7 +410,6 @@ describe('media API', () => {
       code: 'runtime_data_root_unavailable',
       message: '运行时数据目录不可用，请检查服务器数据目录路径和写入权限。',
     });
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('refuses uploads while backup bookkeeping is damaged', async () => {
@@ -457,7 +438,6 @@ describe('media API', () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ code: 'backup_state_invalid' });
     expect(fs.existsSync(path.join(process.env.BLOG_DATA_ROOT, 'media', 'manifest.json'))).toBe(false);
-    expect(mockedQueueCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('preserves both assets when two different images are uploaded concurrently', async () => {

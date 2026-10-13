@@ -48,7 +48,6 @@ describe('project boundaries', () => {
             'data/articles/articles.json',
             'data/navigation/tools.json',
             'data/settings/site.json',
-            'data/settings/cloudflare-r2.json',
         ]) {
             expect(fs.existsSync(path.join(process.cwd(), runtimeFile)), runtimeFile).toBe(false);
         }

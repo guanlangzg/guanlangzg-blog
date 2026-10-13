@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { AlertTriangle, Archive, GitCommitHorizontal, RefreshCcw, RotateCcw } from 'lucide-react';
 import { StatusMessage } from '@/app/components/ui';
 import { EditorButton, EditorMain, EditorPage, EditorPanel, EditorTopBar } from '@/app/editor/components/EditorShell';
@@ -40,6 +41,7 @@ export default function BackupsPage() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [unavailable, setUnavailable] = useState<string | null>(null);
+  const [notConnected, setNotConnected] = useState(false);
   const [selectedCommit, setSelectedCommit] = useState('');
   const [planId, setPlanId] = useState('');
   const [plan, setPlan] = useState<RestorePlanDto | null>(null);
@@ -52,6 +54,7 @@ export default function BackupsPage() {
   const loadBackups = useCallback(async (cursor: string | null = null, append = false) => {
     setIsLoading(true);
     setUnavailable(null);
+    setNotConnected(false);
     try {
       const query = new URLSearchParams({ limit: '20' });
       if (cursor) query.set('cursor', cursor);
@@ -60,8 +63,9 @@ export default function BackupsPage() {
       if (!response.ok) throw new Error(readApiErrorMessage(payload, `HTTP ${response.status}：远端备份历史暂不可查询。`));
       if (!payload || payload.status !== 'available' || !Array.isArray(payload.items)) {
         const reason = payload?.unavailableReason === 'not_connected'
-          ? 'GitHub 备份尚未连接。'
+          ? 'GitHub 备份尚未连接。请先在「站点设置 → GitHub 连接」完成配置并验证。'
           : 'GitHub 远端备份当前不可查询。';
+        setNotConnected(payload?.unavailableReason === 'not_connected');
         setItems([]);
         setNextCursor(null);
         throw new Error(reason);
@@ -143,18 +147,18 @@ export default function BackupsPage() {
           {backupJobId ? <p className="mb-3 text-sm text-muted" role="status">最近备份任务 ID：{backupJobId}；任务读取完成后显示实际状态。</p> : null}
           {backupResponseText ? <p className="mb-3 text-sm text-muted">{backupResponseText}</p> : null}
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div><h2 className="flex items-center gap-2 text-lg font-semibold"><Archive className="h-5 w-5 text-accent" />GitHub 主备份历史</h2><p className="mt-2 text-sm leading-6 text-muted">仅显示 API 实际返回的数据；本地 proof 不等同于可恢复的远端世代。旧 R2 数据备份仍在编辑中心单独管理。</p></div>
+            <div><h2 className="flex items-center gap-2 text-lg font-semibold"><Archive className="h-5 w-5 text-accent" />GitHub 主备份历史</h2><p className="mt-2 text-sm leading-6 text-muted">仅显示 API 实际返回的数据；本地 proof 不等同于可恢复的远端世代。</p></div>
             <div className="flex flex-wrap gap-2"><EditorButton onClick={() => void loadBackups(null, false)} disabled={isLoading}><RefreshCcw className="h-4 w-4" />刷新</EditorButton><EditorButton variant="primary" onClick={createBackup} disabled={busy}><GitCommitHorizontal className="h-4 w-4" />创建 GitHub 备份</EditorButton></div>
           </div>
           {isLoading ? <p className="mt-4 text-sm text-muted">正在查询备份历史…</p> : null}
-          {unavailable ? <div className="mt-4 flex gap-2 rounded-token-card border border-warning-200 bg-warning-50 p-3 text-sm text-warning-600"><AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>远端备份历史暂不可查询</strong><br />{unavailable}</span></div> : null}
+          {unavailable ? <div className="mt-4 flex gap-2 rounded-token-card border border-warning-200 bg-warning-50 p-3 text-sm text-warning-600"><AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>远端备份历史暂不可查询</strong><br />{unavailable}{notConnected ? <span> <Link href="/editor/settings#github-connection" className="underline">前往配置 GitHub 连接</Link></span> : null}</span></div> : null}
           {items.length > 0 ? <ul className="mt-4 divide-y divide-border">{items.map((item) => <li key={item.commitSha} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><code className="break-all text-xs text-fg">{item.commitSha}</code><p className="mt-1 text-xs text-muted">{formatTime(item.committedAt)} · GitHub 远端提交 · digest {item.digest ?? '未提供'}</p></div><div className="flex items-center gap-2"><label className="flex items-center gap-2 text-sm"><input type="radio" name="backup-commit" value={item.commitSha} checked={selectedCommit === item.commitSha} disabled={busy} onChange={() => { setSelectedCommit(item.commitSha); setPlan(null); }} />选择</label><EditorButton disabled={busy} onClick={() => { setSelectedCommit(item.commitSha); void createPlanFor(item.commitSha, setBusy, setMessage, setPlanId, setPlan, setChoices); }}>生成合并计划</EditorButton></div></li>)}</ul> : null}
           {!isLoading && !unavailable && items.length === 0 ? <p className="mt-4 text-sm text-muted">暂无备份。</p> : null}
           {items.length > 0 && selected ? <p className="mt-2 text-xs text-subtle">已选远端 commit：{selected.commitSha}；恢复前会读取计划并要求逐项处理冲突。</p> : null}
           {nextCursor && !unavailable ? <div className="mt-3"><EditorButton disabled={isLoading} onClick={() => void loadBackups(nextCursor, true)}>加载更早备份</EditorButton></div> : null}
         </EditorPanel>
         {plan ? <EditorPanel className="space-y-4 p-4">
-          <div><h2 className="text-lg font-semibold"><RotateCcw className="mr-2 inline h-5 w-5 text-accent" />合并计划与安全摘要</h2><p className="mt-2 break-all text-xs text-muted">备份 commit：{plan.binding.backupCommit}<br />应用基线 revision：{plan.binding.currentRevision}</p><p className="mt-2 text-sm text-muted">将新增 {countInventory(plan.added)} 项；与当前相同 {countInventory(plan.identical)} 项；冲突 {plan.conflicts.length} 项。应用会替换/合并运行时内容并生成新世代，先审阅每个冲突；R2 与此 GitHub 恢复链路分离。</p></div>
+          <div><h2 className="text-lg font-semibold"><RotateCcw className="mr-2 inline h-5 w-5 text-accent" />合并计划与安全摘要</h2><p className="mt-2 break-all text-xs text-muted">备份 commit：{plan.binding.backupCommit}<br />应用基线 revision：{plan.binding.currentRevision}</p><p className="mt-2 text-sm text-muted">将新增 {countInventory(plan.added)} 项；与当前相同 {countInventory(plan.identical)} 项；冲突 {plan.conflicts.length} 项。应用会替换/合并运行时内容并生成新世代；请先审阅每个冲突。</p></div>
           {plan.conflicts.length === 0 ? <p className="text-sm text-muted">没有冲突；确认恢复摘要后可应用。</p> : plan.conflicts.map((conflict) => <fieldset key={conflict.conflictId} className="rounded-token-card border border-border p-3"><legend className="px-1 text-sm font-medium">{conflict.kind}</legend><p className="text-sm text-muted">{conflict.summary}</p><div className="mt-3 flex flex-wrap gap-4">{conflict.resolutions.map((resolution) => <label key={resolution} className="flex items-center gap-2 text-sm"><input type="radio" name={`choice-${conflict.conflictId}`} value={resolution} checked={choices[conflict.conflictId] === resolution} onChange={() => setChoices((current) => ({ ...current, [conflict.conflictId]: resolution }))} />{resolution === 'keep-current' ? '保留当前' : resolution === 'use-backup' ? '采用备份' : '两者都保留'}</label>)}</div></fieldset>)}
           <EditorButton variant="danger" disabled={!allChoicesMade || busy || !planId} onClick={applyPlan}>应用合并恢复</EditorButton>
           {!allChoicesMade ? <p className="text-xs text-warning-600">必须为每个冲突明确选择后才能应用。</p> : null}

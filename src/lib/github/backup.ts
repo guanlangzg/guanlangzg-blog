@@ -42,7 +42,7 @@ export interface EncodedBackupSnapshot {
   candidateDigest: string;
 }
 
-export interface BackupSnapshotManifest {
+interface BackupSnapshotManifest {
   schemaVersion: 1;
   snapshotId: string;
   siteId: string;

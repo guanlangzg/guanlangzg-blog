@@ -85,10 +85,6 @@ def main() -> None:
         site_save = mobile_page.locator("#site-settings-form").get_by_role("button", name="保存设置")
         site_save_box = site_save.bounding_box()
         assert site_save_box is not None and site_save_box["width"] > 280, "Site settings save button should span mobile form width"
-        r2_save = mobile_page.get_by_role("button", name="保存 R2 配置")
-        expect(r2_save).to_be_enabled()
-        r2_save_box = r2_save.bounding_box()
-        assert r2_save_box is not None and r2_save_box["width"] > 280, "R2 save button should span mobile form width"
         mobile_page.screenshot(path=str(SCREENSHOT_DIR / "editor-settings-mobile.png"), full_page=True)
 
         browser.close()

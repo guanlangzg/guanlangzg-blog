@@ -4,12 +4,6 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET, POST } from '@/app/api/data/backup/route';
 import { GET as GET_CURRENT_MANIFEST } from '@/app/api/data/backup/current-manifest/route';
-import {
-  getRemoteBackupQueueSnapshot,
-  queueCurrentBackupToRemote,
-  shouldQueueRemoteBackupRetry,
-  syncCurrentBackupToRemote,
-} from '@/lib/editor-remote-backup';
 import { writeArticlesToDisk } from '@/lib/editor-data-storage';
 import { storeEditorMediaFile } from '@/lib/editor-media-storage';
 import { invalidatePublicContentCache } from '@/lib/public-cache-invalidation';
@@ -20,21 +14,10 @@ import {
   restoreEnv,
 } from '../helpers/api-route';
 
-vi.mock('@/lib/editor-remote-backup', () => ({
-  getRemoteBackupQueueSnapshot: vi.fn(),
-  queueCurrentBackupToRemote: vi.fn(),
-  shouldQueueRemoteBackupRetry: vi.fn(),
-  syncCurrentBackupToRemote: vi.fn(),
-}));
-
 vi.mock('@/lib/public-cache-invalidation', () => ({
   invalidatePublicContentCache: vi.fn(),
 }));
 
-const mockedGetRemoteBackupQueueSnapshot = vi.mocked(getRemoteBackupQueueSnapshot);
-const mockedQueueCurrentBackupToRemote = vi.mocked(queueCurrentBackupToRemote);
-const mockedShouldQueueRemoteBackupRetry = vi.mocked(shouldQueueRemoteBackupRetry);
-const mockedSyncCurrentBackupToRemote = vi.mocked(syncCurrentBackupToRemote);
 const mockedInvalidatePublicContentCache = vi.mocked(invalidatePublicContentCache);
 
 const ORIGINAL_ENV = {
@@ -140,31 +123,6 @@ async function createAuthenticatedHeaders(): Promise<Headers> {
 beforeEach(() => {
   process.chdir(createTempDataRoot());
   vi.clearAllMocks();
-  mockedGetRemoteBackupQueueSnapshot.mockResolvedValue({
-    backupQueue: {
-      pending: 0,
-      failed: 0,
-      failedTasks: [],
-    },
-    backupQueueMessage: null,
-  });
-  mockedQueueCurrentBackupToRemote.mockResolvedValue({
-    queued: true,
-    enabled: true,
-    success: null,
-    message: 'R2 backup sync has been queued.',
-  });
-  mockedShouldQueueRemoteBackupRetry.mockImplementation((remoteBackup) => (
-    remoteBackup.enabled === true &&
-    remoteBackup.success === false &&
-    !('invalidConfiguration' in remoteBackup && remoteBackup.invalidConfiguration) &&
-    !('runtimeDataUnavailable' in remoteBackup && remoteBackup.runtimeDataUnavailable)
-  ));
-  mockedSyncCurrentBackupToRemote.mockResolvedValue({
-    enabled: false,
-    success: false,
-    message: 'R2 backup is disabled.',
-  });
 });
 
 afterEach(() => {
@@ -294,10 +252,9 @@ describe('backup API', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid backup payloads without remote sync', async () => {
+  it('rejects invalid backup payloads before restoring data', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     const currentManifest = await readCurrentManifest();
@@ -313,7 +270,6 @@ describe('backup API', () => {
     expect(await response.json()).toEqual({
       message: '备份文件必须包含 articles 和 navigation 数组。',
     });
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('returns a specific restore error when backup articles contain duplicate slugs', async () => {
@@ -362,7 +318,6 @@ describe('backup API', () => {
     expect(await response.json()).toEqual({
       message: '文章 slug 重复：same',
     });
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('returns a clear error when restoring a backup from a newer schemaVersion', async () => {
@@ -389,7 +344,6 @@ describe('backup API', () => {
     expect(await response.json()).toEqual({
       message: '备份 schemaVersion 999 高于当前支持的 1，请先升级服务后再恢复。',
     });
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('returns a clear error when restoring a backup from a newer version', async () => {
@@ -415,7 +369,6 @@ describe('backup API', () => {
     expect(await response.json()).toEqual({
       message: '备份 version 999 高于当前支持的 1，请先升级服务后再恢复。',
     });
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('returns a clear error when restoring an encrypted backup payload through the local restore API', async () => {
@@ -444,10 +397,9 @@ describe('backup API', () => {
     expect(await response.json()).toEqual({
       message: '检测到加密备份文件，当前恢复入口不支持，请先使用解密导入工具。',
     });
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
-  it('restores valid backup payloads and writes a remote restore snapshot', async () => {
+  it('restores valid backup payloads without changing the portable restore contract', async () => {
     process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
     process.env.BLOG_DATA_ROOT = createTempDataRoot();
     seedRuntimeData(process.env.BLOG_DATA_ROOT);
@@ -505,65 +457,7 @@ describe('backup API', () => {
       }),
     ]);
     expect(new Uint8Array(restoredMediaFile)).toEqual(PNG_BYTES);
-    expect(mockedSyncCurrentBackupToRemote).toHaveBeenCalledWith({
-      reason: 'local-restore',
-      writeSnapshot: true,
-    });
-    expect(payload.backupQueue).toEqual({
-      pending: 0,
-      failed: 0,
-      failedTasks: [],
-    });
     expect(mockedInvalidatePublicContentCache).toHaveBeenCalledWith('local-restore');
-  });
-
-  it('requeues local restore snapshot sync when the post-restore R2 upload fails transiently', async () => {
-    process.env.EDITOR_ACCESS_TOKEN = 'test-editor-token';
-    process.env.BLOG_DATA_ROOT = createTempDataRoot();
-    seedRuntimeData(process.env.BLOG_DATA_ROOT);
-    const backupPayload = await (await GET(await createAuthedEditorRequest('http://localhost/api/data/backup'))).json();
-    const currentManifest = backupPayload.manifest;
-
-    mockedSyncCurrentBackupToRemote.mockResolvedValueOnce({
-      enabled: true,
-      success: false,
-      message: 'R2 upload failed.',
-    });
-    mockedGetRemoteBackupQueueSnapshot.mockResolvedValue({
-      backupQueue: {
-        pending: 1,
-        failed: 0,
-        failedTasks: [],
-      },
-      backupQueueMessage: null,
-    });
-
-    const response = await POST(
-      await createAuthedEditorRequest('http://localhost/api/data/backup', {
-        method: 'POST',
-        body: JSON.stringify({
-          ...backupPayload,
-          currentManifest,
-        }),
-      })
-    );
-    const payload = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(mockedQueueCurrentBackupToRemote).toHaveBeenCalledWith({
-      reason: 'local-restore',
-      writeSnapshot: true,
-    });
-    expect(payload.remoteBackup).toEqual({
-      enabled: true,
-      success: false,
-      message: 'R2 upload failed.',
-    });
-    expect(payload.backupQueue).toEqual({
-      pending: 1,
-      failed: 0,
-      failedTasks: [],
-    });
   });
 
   it('rejects local restores when media manifest exists without inline files', async () => {
@@ -599,7 +493,6 @@ describe('backup API', () => {
     expect(fs.readFileSync(path.join(process.env.BLOG_DATA_ROOT, 'media', storedMedia.asset.path))).toEqual(
       Buffer.from(PNG_BYTES)
     );
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('reports backup restore when the runtime data root path is unavailable', async () => {
@@ -627,7 +520,6 @@ describe('backup API', () => {
       code: 'runtime_data_root_unavailable',
       message: '运行时数据目录不可用，请检查服务器数据目录路径和写入权限。',
     });
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('rejects stale local restores without replacing newer data', async () => {
@@ -686,7 +578,6 @@ describe('backup API', () => {
         id: 'article-newer',
       }),
     ]);
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('rejects stale local restores after another manifest-backed write', async () => {
@@ -739,7 +630,6 @@ describe('backup API', () => {
         id: 'article-newer-manifest',
       }),
     ]);
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 
   it('rejects local restores when media changed after the restore precondition was captured', async () => {
@@ -775,6 +665,5 @@ describe('backup API', () => {
         }),
       })
     );
-    expect(mockedSyncCurrentBackupToRemote).not.toHaveBeenCalled();
   });
 });

@@ -18,7 +18,7 @@ const RESERVED_SLUGS = new Set([
   'sitemap.xml',
 ]);
 
-export class PublishingSnapshotError extends Error {
+class PublishingSnapshotError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PublishingSnapshotError';

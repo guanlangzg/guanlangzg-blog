@@ -155,6 +155,16 @@
 - 修复实践：对设置动态 CSP nonce 的 Next 公开阅读页使用 `dynamic = 'force-dynamic'`，包括首页、归档、导航和文章详情；文章详情同时移除 `generateStaticParams`，否则 Next 仍会将已知 slug 预渲染成静态 HTML。生产 `next build` 路由摘要应将这些路由标记为 `ƒ`，prerender manifest 不应含文章详情项。`npm run smoke:public` 可在文档响应层验证没有 `s-maxage`/Next prerender cache，逐个核对内联可执行脚本由 CSP nonce/hash 授权，并继续验证可见标题、交互和浏览器错误；首页 smoke 文案应跟 `src/lib/site-settings.ts` 默认值一致。
 - 2026-10-03 修复提交 `74a9b8cd116c6c0667b5275be5487b3a7731a935` 已推送至 `fix/public-csp-nonce-dynamic`（未推 `memory.md`、未改 `main`）。GitHub Actions run `37103810500` 的 check 与 image jobs 均成功：117 个 Vitest 文件、920 项通过，lint、typecheck、deadcode 通过；GHCR 镜像 `sha-74a9b8cd116c6c0667b5275be5487b3a7731a935` 摘要为 `sha256:a82128bbac75b8871808a642e816c872504df88c62df0ff541212bb4c35455a8`。服务器端重复执行 Docker build 因官方 Alpine 源慢约 30 分钟停在 apk，后切阿里云源后已停止尝试；此后 SSH banner 与公网 `/api/health`、`/` 请求均超时，无法确认候选构建是否完全退出或线上容器当前状态，故本次**没有切换生产镜像**。恢复部署前先只读核验远端容器/进程/Compose/租约，确认后再按既有 `docker-update.sh` 流程部署上述 GHCR 镜像；若重建后租约仍旧，按 90 秒 stale 规则核实 hostname 与 mtime 后由应用安全回收，禁止直接删除锁。服务器运维目录的 `memory.md` 尚未更新，因为 SSH 不可达。
 
+## 2026-10-06 GitHub 连接配置 UI 补齐（本轮实测）
+
+- **缺口定位**：`GET/PUT /api/editor/github` + `POST /api/editor/github/check`（pending 才可发起，`github-check` job 校验三仓库 ID 匹配、备份私库、Pages 源 = pages 默认分支根路径，通过转 `connected`，失败分类为 `permission_error/private_required/network_error/installation_revoked`）早已存在，缺的只是配置 UI。补齐落点：`/editor/settings` 新增 `GitHubConnectionPanel`（懒加载展开，挂 `#github-connection` 锚点）。
+- **仓库数字 ID 是硬约束**：`src/lib/github/client.ts` 的 `parseRepository` 要求返回的 id/owner/name 与配置完全一致；私有仓库无法匿名查询 ID，因此新增 `src/lib/github/discovery.ts` + `POST /api/editor/github/resolve`（JWT → installation token 仅 `contents:read` 不限 repository_ids → `GET /installation/repositories` 翻页上限 300）。私钥错误在 JWT 生成前拦截，不产生网络请求。
+- **面板测试的两个本机坑**：① `vi.useFakeTimers()` 全量 fake 会连 React 调度一起挂掉（测试 5 秒超时无任何断言输出），必须 `toFake: ['setTimeout','clearTimeout']` 只 fake 轮询睡眠（同 `publishing-workbench.test.tsx` 只 fake interval 的先例）；② fake timers 下 `findByText/waitFor` 依赖定时器轮询会永久挂起，改用 `await act(async () => { await new Promise(r => setImmediate(r)); })` 一次冲刷全部微任务链后同步断言。
+- **测试夹具教训**：假 PEM 字符串在 `createSign().sign()` 前就被 `createPrivateKey` 拒绝，JWT 类测试必须 `generateKeyPairSync('rsa', { modulusLength: 2048 })` 生成真实密钥（模块级生成一次）；`localeCompare` 排序在 Windows/CI ICU 下结果不一致，展示排序用码点比较才可测。
+- **设置页新增面板必须懒加载**：`editor-settings-page.test.tsx` 16 个用例全部用 `mockResolvedValueOnce` 顺序链 mock fetch，面板若挂载即请求会整体移位打穿；懒加载（展开才 fetch）让既有测试零改动通过。发布页同理只加静态引导链接、不发新请求。
+- **check 状态机语义**：失败状态（非 pending）下不能直接重试验证（check 路由 409），必须重新 PUT 产生新 revision——面板据此把"保存并验证"做成主按钮，"验证连接"仅 pending 态可用。`GET /api/editor/jobs/:id` 会掩码错误消息（固定"任务未能完成。"），失败原因只能靠连接状态 DTO 的分类展示。
+- 验证：新增 18 项测试（discovery 6、resolve 路由 7、面板 5）+ 既有 49 项（settings 16、backups 5、publishing 6、editor-api 22）全过；lint/typecheck/knip/check-env/Python CI 项全过。未验证：真实 GitHub App 凭据走通 resolve→check（需真实安装），浏览器手工 smoke。产品决策已记入 `最终博客项目讨论汇总.md`（setup 向导不含 GitHub，修订"引导页配置"表述）。
+
 ## 环境备忘
 
 - 本会话并行派发子代理审查时，同时 5 个会有 3 个报 `user concurrency limit exceeded`，2-3 个并发可稳定运行；重试即可补齐。
@@ -215,7 +225,21 @@
 - **跨平台测试盲区（本轮 CI 实际抓到的失败，勿再重复）**：`tests/scripts/docker-entrypoint-permissions.test.ts` 的两个用例用 `spawnSync('sh', ...)` + 临时目录里的 `su-exec`/`chmod`/`chown` stub 模拟权限，但 `fs.writeFileSync` **不设置可执行位**——POSIX 的 PATH 搜索会跳过不可执行文件，于是调用落到真实 `chown` 上，Linux runner 没有 `nextjs` 用户即报 `chown: invalid user: 'nextjs:nodejs'`。Windows/MSYS 既不强制可执行位（实测未 chmod 的 stub 也能执行），这两条用例又被 `shellAvailable`（PATH 里没有 `sh`）整条 `it.runIf` 跳过，因此本机全量 127 文件全绿也完全看不到。修法：写 stub 后显式 `fs.chmodSync(stubPath, 0o755)`。**结论：凡依赖 `sh` 的测试在本机默认是跳过状态，不要拿本机全绿当作它们通过；这类用例只能靠 CI 验证。** 本机若要复现，需把 `D:\Program Files\Git\usr\bin` 加进 PATH（Git for Windows 自带 `sh.exe`，WSL 本机未安装发行版）。
 - **PR #2**（`fix/review-2026-10-05-optimization` → `main`）：提交 `557e30a`（114 文件）+ `3e969c6`（上一条 stub 可执行位修复）。
 
-## 2026-10-06 生产 Docker 部署约定
+## 2026-10-12 完全移除 Cloudflare R2 备份
+
+- 用户决策是删除 R2 备份产品及相关功能，而不是只隐藏入口。完整边界包括 setup/UI、R2 配置和 bootstrap API、远端同步/恢复/重试 API、写入钩子、启动定时任务、R2 队列与存储库、R2 专属测试、Compose `R2_*` 变量及 S3 SDK 依赖；GitHub 备份、发布水位/任务、本地 JSON 备份恢复必须保留。
+- 后续决定：Cloudflare Insights/Analytics 也不再集成，CSP 中不保留任何 Cloudflare 域名；`RemoteBackup*` 在当前代码中仅表示 GitHub 远端备份。
+- 本轮验证顺序：`node scripts/test/check-env-files.mjs`、Knip、TypeScript、ESLint、聚焦回归（18 文件/150 项）、GitHub 连接与备份回归、全量 Vitest（123 文件/924 项通过/2 项平台跳过）。全量测试若出现旧 URL 断言失败，先核对是否只是测试仍引用已删除的 `tab=r2`，不要恢复 R2 代码。
+- Windows 中文路径和全量测试的已知现象仍适用：测试夹具中的损坏 JSON、不可用数据根、Next 静态生成上下文缺失会输出 stderr，但只要用例通过不视为失败；Docker/容器构建仍需按既有 CI 约定验证。
+
+## 2026-10-13 清理 Cloudflare 残留与 Knip 死代码门禁
+
+- 活动源码中应一并清理供应商专属的客户端 IP 请求头（包括 `cf-connecting-ip`、`true-client-ip`）；在无可信 XFF 时仅使用通用 `x-real-ip`，并用测试断言专属头不会变成限流身份。保留仅说明已取代决策的历史审计/讨论记录，以及断言旧集成不存在的架构测试。
+- Knip 的 `@public` JSDoc 标签可用于保留静态扫描无法追踪的真实边界：经原生 URL 动态导入的 `admin:init` 运行时 API、启动 worker 从动态 import 解构的 handler、以及 `import('...').Type` 行内类型。添加前必须找到并核对实际调用点；mock 工厂里孤立的属性不构成生产引用。
+- 开启 Knip `exports`/`types` 后，区分“内部使用但 export 多余”与“模块内部也零调用”的符号：前者收为私有，后者删除整段定义和失效 import。删除多余 `vi.mock` 假属性，但保留其底层实际业务校验/事务函数。
+- 删除直接依赖后，`package-lock.json` 可比源码 diff 大幅收缩；`node_modules` 是被忽略的旧安装产物，须先跑 `npm prune --dry-run --ignore-scripts` 审核范围，再按 lockfile 执行 `npm prune --ignore-scripts`。若 `npm ls` 仍显示某依赖，先查完整依赖树；例如 `undici` 是 jsdom 的传递依赖，保留其 `overrides` 安全钉版本，不要误当成直接依赖继续删。
+- 备份能力边界：R2 移除后仍须保留 GitHub 私有备份作业/水位与候选 proof 门槛、本地 JSON 导出/原子恢复、受管媒体清单和 GC。聚焦回归覆盖这些路径；全量 Vitest 与 Docker runner 仍按本项目约束在 CI 执行。
+
 
 - 部署 Docker 项目时，由 GitHub Actions 构建、测试并发布镜像；**镜像必须先下载到部署工作站，校验后打成服务器可 `docker load` 的归档，再 SCP 上传；生产服务器只导入并运行镜像，不直接访问 GHCR，也不做源码构建**。工作站有 Docker 时使用 `docker pull/save`；没有 Docker 时可用经过校验的 Crane 从 GHCR 导出 Docker tarball。这样节约服务器资源并提升部署速度。
 - 本项目 CI 链路为 `check` + `runner-image` + `publish-image`。按完整提交 SHA 使用 `ghcr.io/guanlangzg/guanlangzg-blog:sha-<完整 SHA>`；切换前核验 workflow 成功、GHCR manifest digest、平台、config digest 和所有 layer digest。`docker load` 后核对 revision 标签/平台/层数；Docker 导入生成的本地 image ID 可能与 OCI config digest 不同，应用 manifest/config/layer 身份验证，不要因 image ID 表示变化误判内容不一致。

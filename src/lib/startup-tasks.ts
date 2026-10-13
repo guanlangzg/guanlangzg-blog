@@ -7,12 +7,9 @@ import {
 } from '@/lib/runtime-instance-lease';
 
 let startupTasksStarted = false;
-let scheduledRemoteBackupTimer: ReturnType<typeof setInterval> | null = null;
 let runtimeInstanceLease: RuntimeInstanceLeaseHandle | null = null;
 let jobWorkerAbortController: AbortController | null = null;
 let shutdownSignalHandlersRegistered = false;
-
-export const SCHEDULED_REMOTE_BACKUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
 
 // A gracefully stopped process must release its runtime instance lease. Container
 // restarts hand the next instance a different hostname, so its dead-process check
@@ -35,26 +32,6 @@ function unregisterShutdownSignalHandlers(): void {
     shutdownSignalHandlersRegistered = false;
     process.off('SIGINT', releaseRuntimeStateOnSignal);
     process.off('SIGTERM', releaseRuntimeStateOnSignal);
-}
-
-async function drainRemoteBackupQueue(): Promise<void> {
-    const { drainPendingBackups } = await import('@/lib/editor-remote-backup');
-
-    await drainPendingBackups();
-}
-
-async function queueScheduledRemoteBackup(): Promise<void> {
-    const { queueCurrentBackupToRemote } = await import('@/lib/editor-remote-backup');
-
-    const result = await queueCurrentBackupToRemote({
-        reason: 'scheduled-3h',
-        writeLatest: true,
-        writeSnapshot: true,
-    });
-
-    if (!result.queued && result.enabled) {
-        console.warn('[startup-tasks] Scheduled remote backup was not queued:', result.message);
-    }
 }
 
 async function verifyMediaStorageConsistency(): Promise<void> {
@@ -110,20 +87,6 @@ async function startJobWorker(signal: AbortSignal): Promise<void> {
     await worker.runJobWorkerLoop({ handlers, signal });
 }
 
-function schedulePeriodicRemoteBackup(): void {
-    if (scheduledRemoteBackupTimer) {
-        return;
-    }
-
-    scheduledRemoteBackupTimer = setInterval(() => {
-        void queueScheduledRemoteBackup().catch((error) => {
-            console.error('[startup-tasks] Failed to queue scheduled remote backup:', error);
-        });
-    }, SCHEDULED_REMOTE_BACKUP_INTERVAL_MS);
-
-    scheduledRemoteBackupTimer.unref?.();
-}
-
 // Verifies the runtime data root is writable so misconfiguration surfaces at
 // startup instead of during the first write attempt. Errors are logged only;
 // they do not abort startup so the process can still serve read-only traffic.
@@ -149,14 +112,9 @@ export function startServerStartupTasks(): void {
     runtimeInstanceLease = acquireRuntimeInstanceLease(getRuntimeDataRootPath());
     registerShutdownSignalHandlers();
     verifyDataRootWritable();
-    schedulePeriodicRemoteBackup();
 
     void verifyMediaStorageConsistency().catch((error) => {
         console.error('[startup-tasks] Failed to verify media storage consistency:', error);
-    });
-
-    void drainRemoteBackupQueue().catch((error) => {
-        console.error('[startup-tasks] Failed to drain pending backups:', error);
     });
 
     jobWorkerAbortController = new AbortController();
@@ -167,15 +125,10 @@ export function startServerStartupTasks(): void {
     });
 }
 
-export function stopServerStartupTasks(): void {
+function stopServerStartupTasks(): void {
     unregisterShutdownSignalHandlers();
     jobWorkerAbortController?.abort();
     jobWorkerAbortController = null;
-
-    if (scheduledRemoteBackupTimer) {
-        clearInterval(scheduledRemoteBackupTimer);
-        scheduledRemoteBackupTimer = null;
-    }
 
     runtimeInstanceLease?.release();
     runtimeInstanceLease = null;

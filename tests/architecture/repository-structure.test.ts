@@ -53,14 +53,11 @@ describe('repository architecture boundaries', () => {
         });
     });
 
-    it('keeps backup actions on resource endpoints', () => {
-        const remoteRoute = readRepoFile('src', 'app', 'api', 'data', 'backup', 'remote', 'route.ts');
-        const editorHome = readRepoFile('src', 'app', 'editor', '(authenticated)', 'page.tsx');
-
-        expect(remoteRoute).toContain('parseRemoteBackupAction');
-        expect(editorHome).toContain('/api/data/backup/remote/sync');
-        expect(editorHome).toContain('/api/data/backup/remote/restore');
+    it('keeps local restore preconditions and GitHub backup APIs while removing R2 APIs', () => {
         expect(fs.existsSync(repoPath('src', 'app', 'api', 'data', 'backup', 'current-manifest', 'route.ts'))).toBe(true);
+        expect(fs.existsSync(repoPath('src', 'app', 'api', 'editor', 'backups', 'route.ts'))).toBe(true);
+        expect(fs.existsSync(repoPath('src', 'app', 'api', 'data', 'backup', 'remote'))).toBe(false);
+        expect(fs.existsSync(repoPath('src', 'app', 'api', 'data', 'cloudflare-r2'))).toBe(false);
     });
 
     it('enforces production container and deployment safety boundaries', () => {
@@ -87,21 +84,6 @@ describe('repository architecture boundaries', () => {
         // limited to loopback, and the cookie must drop Secure while keeping the rest.
         expect(deployCompose).toContain('0.0.0.0:5678:3000');
         expect(deployCompose).toContain('COOKIE_SECURE: "false"');
-    });
-
-    it('keeps R2 backups explicitly plaintext and removes obsolete encryption claims', () => {
-        const sources = [
-            readRepoFile('README.md'),
-            readRepoFile('deploy', 'compose.prod.yaml'),
-        ];
-
-        sources.forEach((source) => {
-            expect(source).not.toContain('R2_BACKUP_ENCRYPTION_PASSPHRASE');
-            expect(source).not.toContain('backupEncryptionPassphrase');
-            expect(source).not.toContain('R2 上传对象不包含明文敏感内容');
-        });
-
-        expect(readRepoFile('README.md')).toContain('R2 备份以明文 JSON 写入对象存储');
     });
 
     it('keeps local-only artifacts ignored', () => {

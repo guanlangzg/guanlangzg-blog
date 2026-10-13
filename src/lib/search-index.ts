@@ -45,7 +45,7 @@ function getArticleSlug(article: Article): string {
     return article.slug || createArticleSlug(article);
 }
 
-export function createSearchIndex(input: {
+function createSearchIndex(input: {
     articles: Article[];
     navigation: Category[];
 }): SearchIndex {
@@ -85,7 +85,7 @@ export function createSearchIndex(input: {
     };
 }
 
-export function writeSearchIndex(index: SearchIndex): void {
+function writeSearchIndex(index: SearchIndex): void {
     writeJsonAtomically(getSearchIndexFilePath(), index);
 }
 

@@ -77,7 +77,7 @@ function confirmPayload(candidate: { release: ReleaseRecord }) {
 describe('publishing confirmation contracts', () => {
   it('rejects a candidate request whose expected resource revision is stale', async () => {
     setup();
-    await expect(service.createCandidate(scope, 'r2')).rejects.toMatchObject({ status: 409 });
+    await expect(service.createCandidate(scope, 'stale-revision')).rejects.toMatchObject({ status: 409 });
     expect(tx.releases.size).toBe(0);
   });
 
@@ -166,7 +166,7 @@ describe('publishing confirmation contracts', () => {
   it('marks a candidate stale when its selected input revision changes', async () => {
     setup();
     const candidate = await previewReady();
-    tx.inputs.selectedInputs = { id: 'a', revision: 'r2' };
+    tx.inputs.selectedInputs = { id: 'a', revision: 'revision-2' };
 
     await expect(service.confirm(candidate.release.id, confirmPayload(candidate))).rejects.toMatchObject({ status: 409 });
     expect(tx.readRelease(candidate.release.id).release.status).toBe('stale');

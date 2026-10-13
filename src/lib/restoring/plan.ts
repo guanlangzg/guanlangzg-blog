@@ -8,7 +8,7 @@ import type { SiteSettings } from '@/lib/site-settings';
 
 export type RestoreResolution = 'keep-current' | 'use-backup' | 'keep-both';
 
-export type RestoreConflictKind =
+type RestoreConflictKind =
   | 'article-id'
   | 'article-slug'
   | 'article-legacy-ambiguous'
@@ -46,12 +46,12 @@ export interface RestoreConflict {
   };
 }
 
-export interface RestoreInventoryItem {
+interface RestoreInventoryItem {
   itemId: string;
   summary: string;
 }
 
-export interface RestorePlanBinding {
+interface RestorePlanBinding {
   currentRevision: string;
   backupCommit: string;
   backupContentDigest: string;

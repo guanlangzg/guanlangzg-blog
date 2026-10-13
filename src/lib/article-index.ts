@@ -4,7 +4,7 @@ import { countMarkdownWords } from '@/lib/article-quality';
 import { normalizeOptionalString } from '@/lib/utils';
 import { normalizeSourceLinks, normalizeRevisionNotes } from '@/lib/source-links';
 
-export const ARTICLE_INDEX_VERSION = 1;
+const ARTICLE_INDEX_VERSION = 1;
 
 export interface ArticleIndexEntry {
     slug: string;

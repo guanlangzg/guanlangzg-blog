@@ -22,7 +22,6 @@ import { createEditorPublishingService } from '@/lib/editor-runtime/adapters';
 
 vi.mock('@/lib/editor-runtime/adapters', () => ({
   createEditorPublishingService: vi.fn(),
-  listRecordedBackupProofs: vi.fn(() => []),
 }));
 
 vi.mock('@/lib/editor-api-auth', () => ({

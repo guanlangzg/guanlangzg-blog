@@ -5,7 +5,7 @@ import { writeJsonAtomically } from '@/lib/atomic-json-writer';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 import { hasGitHubPrivateKey } from '@/lib/github/secrets';
 
-export type GitHubRepositoryRole = 'source' | 'pages' | 'backup';
+type GitHubRepositoryRole = 'source' | 'pages' | 'backup';
 export type GitHubConnectionStatus = 'not_configured' | 'pending' | 'connected' | 'permission_error' | 'private_required' | 'network_error' | 'installation_revoked';
 type PersistedGitHubConnectionStatus = Exclude<GitHubConnectionStatus, 'not_configured'>;
 

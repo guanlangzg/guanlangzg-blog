@@ -31,15 +31,6 @@ services:
       # Required for the current plain-HTTP deployment; HttpOnly and SameSite stay on.
       COOKIE_SECURE: "false"
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
-      # Optional Cloudflare R2 secondary backup; GitHub is the primary destination.
-      R2_BACKUP_ENABLED: ${R2_BACKUP_ENABLED:-false}
-      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
-      R2_BUCKET: ${R2_BUCKET:-}
-      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
-      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
-      R2_PREFIX: ${R2_PREFIX:-blog-navigation}
-      R2_ENDPOINT: ${R2_ENDPOINT:-}
-      R2_SNAPSHOT_ON_WRITE: ${R2_SNAPSHOT_ON_WRITE:-false}
     volumes:
       # Never collapse these into one directory: content, credentials and the
       # rebuildable build workspace have different backup and retention rules.
@@ -60,7 +51,7 @@ services:
       - SETGID
       - SETUID
     restart: unless-stopped
-    # Liveness only: GitHub/R2 failures surface as degraded readiness, not a restart loop.
+    # Liveness only: GitHub or local storage/config issues surface as degraded readiness, not a restart loop.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:3000/api/health"]
       interval: 30s

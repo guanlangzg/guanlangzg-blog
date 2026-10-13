@@ -10,7 +10,6 @@ import {
     EDITOR_MEDIA_MAX_IMAGE_BYTES,
     storeEditorMediaFile,
 } from '@/lib/editor-media-storage';
-import { queueCurrentBackupToRemote } from '@/lib/editor-remote-backup';
 import { withRuntimeDataRootLock } from '@/lib/runtime-data-lock';
 
 function createInvalidMediaResponse(error: unknown): NextResponse | null {
@@ -169,15 +168,10 @@ export async function POST(request: NextRequest) {
 
     try {
         const stored = await withRuntimeDataRootLock(() => storeEditorMediaFile({ bytes }));
-        const remoteBackup = await queueCurrentBackupToRemote({
-            reason: 'media-write',
-            writeSnapshot: false,
-        });
 
         return NextResponse.json({
             success: true,
             asset: stored.asset,
-            remoteBackup,
         });
     } catch (error) {
         const unavailableResponse = createEditorDataRootUnavailableResponse(error);

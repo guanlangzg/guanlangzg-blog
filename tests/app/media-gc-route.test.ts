@@ -16,14 +16,6 @@ import {
   restoreEnv,
 } from '../helpers/api-route';
 
-vi.mock('@/lib/editor-remote-backup', () => ({
-  queueCurrentBackupToRemote: vi.fn(),
-}));
-
-vi.mock('@/lib/r2-backup-storage', () => ({
-  uploadMediaAssetToR2: vi.fn(),
-}));
-
 const ORIGINAL_ENV = {
   BLOG_NAVIGATION_DOCKER: process.env.BLOG_NAVIGATION_DOCKER,
   BLOG_DATA_ROOT: process.env.BLOG_DATA_ROOT,

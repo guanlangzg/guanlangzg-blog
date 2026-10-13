@@ -80,7 +80,7 @@ export function decodeBackupArticle(metadataBytes: Uint8Array, contentBytes: Uin
   return article;
 }
 
-export interface BackupManifestFile {
+interface BackupManifestFile {
   size: number;
   sha256: string;
 }

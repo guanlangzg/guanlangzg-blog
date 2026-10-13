@@ -23,7 +23,6 @@ import {
     patchArticlesToDiskIfRevisionMatches,
     writeArticlesToDiskIfRevisionMatches,
 } from '@/lib/editor-data-storage';
-import { queueCurrentBackupToRemote } from '@/lib/editor-remote-backup';
 import { invalidatePublicContentCache } from '@/lib/public-cache-invalidation';
 import { hasWritableRuntimeDataRoot } from '@/lib/runtime-data-root';
 
@@ -160,15 +159,11 @@ export async function PUT(request: NextRequest) {
         );
     }
 
-    const remoteBackup = await queueCurrentBackupToRemote({
-        reason: 'articles-write',
-    });
     invalidatePublicContentCache('articles-write');
 
     return NextResponse.json({
         success: true,
         revision: writeResult.resourceManifest.revision,
-        remoteBackup,
     });
 }
 
@@ -247,12 +242,10 @@ export async function PATCH(request: NextRequest) {
         );
     }
 
-    const remoteBackup = await queueCurrentBackupToRemote({ reason: 'articles-patch' });
     invalidatePublicContentCache('articles-patch');
 
     return NextResponse.json({
         success: true,
         revision: writeResult.resourceManifest.revision,
-        remoteBackup,
     });
 }

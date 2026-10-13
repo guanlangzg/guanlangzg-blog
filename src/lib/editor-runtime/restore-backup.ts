@@ -16,7 +16,7 @@ import type { RestorableEditorData } from '@/lib/restoring/plan';
 const ARTICLE_METADATA_PATTERN = /^articles\/([a-f0-9]{64})\/metadata\.json$/;
 const MEDIA_OBJECT_PATTERN = /^media\/objects\/([a-f0-9]{64})\.([a-z0-9]{1,10})$/;
 
-export class RestoreBackupDecodeError extends Error {
+class RestoreBackupDecodeError extends Error {
   constructor(message: string, public readonly code: 'UNSUPPORTED_SCHEMA' | 'INVALID_BACKUP') {
     super(message);
     this.name = 'RestoreBackupDecodeError';

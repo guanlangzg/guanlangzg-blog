@@ -30,7 +30,7 @@ function watermarkPath(root: string): string {
     return path.join(root, WATERMARK_RELATIVE_PATH);
 }
 
-export function createInitialBackupWatermark(generation = randomUUID()): BackupWatermarkState {
+function createInitialBackupWatermark(generation = randomUUID()): BackupWatermarkState {
     return {
         generation,
         contentSequence: 0,
@@ -39,7 +39,7 @@ export function createInitialBackupWatermark(generation = randomUUID()): BackupW
     };
 }
 
-export function parseBackupWatermark(value: unknown): BackupWatermarkState | null {
+function parseBackupWatermark(value: unknown): BackupWatermarkState | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return null;
     }
@@ -209,7 +209,7 @@ export function recordRestoredContentMutationUnderLock(
     return next;
 }
 
-export function recordVerifiedFullBackupUnderLock(
+function recordVerifiedFullBackupUnderLock(
     root: string,
     backup: VerifiedFullBackup
 ): BackupWatermarkState {
@@ -232,23 +232,6 @@ export async function recordVerifiedFullBackup(backup: VerifiedFullBackup): Prom
     return withRuntimeDataRootLock(() =>
         recordVerifiedFullBackupUnderLock(getRuntimeDataRootPath(), backup)
     );
-}
-
-export async function startBackupGeneration(): Promise<BackupWatermarkState> {
-    return withRuntimeDataRootLock(() => {
-        const next = createInitialBackupWatermark();
-        writeJsonAtomically(watermarkPath(getRuntimeDataRootPath()), next);
-        return next;
-    });
-}
-
-export async function setBackupBlockedReason(reason: string | null): Promise<BackupWatermarkState> {
-    return withRuntimeDataRootLock(() => {
-        const root = getRuntimeDataRootPath();
-        const next = { ...readBackupWatermarkUnderLock(root), blockedReason: reason };
-        writeJsonAtomically(watermarkPath(root), next);
-        return next;
-    });
 }
 
 function isDirtyBackupJob(job: JobRecord, state: BackupWatermarkState): boolean {
@@ -296,8 +279,4 @@ export function ensureDirtyBackupJobUnderLock(root: string): void {
             value: null,
         },
     });
-}
-
-export async function reconcileDirtyBackupJob(): Promise<void> {
-    await withRuntimeDataRootLock(() => ensureDirtyBackupJobUnderLock(getRuntimeDataRootPath()));
 }

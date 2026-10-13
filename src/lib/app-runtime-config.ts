@@ -14,10 +14,9 @@ const APP_RUNTIME_CONFIG_FILE_NAME = 'app-runtime.json';
 const APP_RUNTIME_CONFIG_VERSION = 1;
 const DEFAULT_PUBLIC_SITE_URL = 'http://localhost:3000';
 
-export type RuntimeConfigSource = 'file' | 'env' | 'default';
-export type RuntimeConfigEffect = 'hot' | 'hot-server' | 'next-session' | 'restart-required';
+type RuntimeConfigSource = 'file' | 'env' | 'default';
 
-export interface AppRuntimeDataRootConfig {
+interface AppRuntimeDataRootConfig {
     path: string;
     pendingPath: string | null;
     requiresRestart: boolean;
@@ -280,7 +279,7 @@ function parseStoredAppRuntimeConfig(value: unknown, filePath: string): AppRunti
     };
 }
 
-export function getAppRuntimeConfigFilePath(): string {
+function getAppRuntimeConfigFilePath(): string {
     return getRuntimeSettingsFilePath(APP_RUNTIME_CONFIG_FILE_NAME);
 }
 

@@ -55,8 +55,8 @@ if ! DEPLOY_IMAGE="${DEPLOY_IMAGE}" docker compose -f "${COMPOSE_FILE}" up -d ap
     exit 1
 fi
 
-# Check only process liveness. Remote GitHub/R2 outages are readiness issues and
-# must not trigger an image rollback or restart loop.
+# Check only process liveness. GitHub or local storage/config issues are readiness issues
+# and must not trigger an image rollback or restart loop.
 HEALTHY=0
 for attempt in 1 2 3 4 5 6; do
     if docker compose -f "${COMPOSE_FILE}" exec -T app curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
@@ -73,8 +73,8 @@ if [ "${HEALTHY}" -ne 1 ]; then
     exit 1
 fi
 
-# A degraded readiness response may be caused by a transient upstream outage.
+# Readiness checks local storage and persisted workflow state.
 docker compose -f "${COMPOSE_FILE}" exec -T app curl -fsS http://127.0.0.1:3000/api/ready >/dev/null 2>&1 \
-    || echo "[update] readiness is degraded; inspect local storage/config and remote backup connectivity"
+    || echo "[update] readiness is degraded; inspect local storage permissions and workflow state integrity"
 
 echo "[update] done. Previous image retained as ${PREVIOUS_TAG}; run '$0 rollback' to restore it."

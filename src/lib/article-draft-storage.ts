@@ -1,7 +1,7 @@
 import type { Frontmatter } from '@/app/types/article';
 
-export const ARTICLE_DRAFT_VERSION = 1;
-export const ARTICLE_DRAFT_KEY_PREFIX = 'blog-editor-article-draft:v2';
+const ARTICLE_DRAFT_VERSION = 1;
+const ARTICLE_DRAFT_KEY_PREFIX = 'blog-editor-article-draft:v2';
 
 export interface StoredDraft {
   version: number;

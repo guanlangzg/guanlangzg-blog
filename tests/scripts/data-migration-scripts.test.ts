@@ -144,25 +144,11 @@ describe('runtime data migration scripts', () => {
     writeJson(path.join(sourceRoot, 'articles', 'articles.json'), [article]);
     writeJson(path.join(sourceRoot, 'navigation', 'tools.json'), navigation);
     writeJson(path.join(sourceRoot, 'settings', 'site.json'), settings);
-    writeJson(path.join(sourceRoot, 'settings', 'cloudflare-r2.json'), {
-      enabled: true,
-      accountId: '0123456789abcdef0123456789abcdef',
-      bucket: 'blog-data',
-      accessKeyId: 'access-key',
-      secretAccessKey: 'source-secret-key',
-      prefix: 'blog-navigation',
-      endpoint: '',
-      snapshotOnWrite: false,
+    writeJson(path.join(sourceRoot, 'settings', 'private-token.json'), {
+      token: 'source-secret-token',
     });
-    writeJson(path.join(targetRoot, 'settings', 'cloudflare-r2.json'), {
-      enabled: true,
-      accountId: '22222222222222222222222222222222',
-      bucket: 'target-blog-data',
-      accessKeyId: 'target-access-key',
-      secretAccessKey: 'target-secret-key',
-      prefix: 'target-prefix',
-      endpoint: '',
-      snapshotOnWrite: true,
+    writeJson(path.join(targetRoot, 'settings', 'private-token.json'), {
+      token: 'target-secret-token',
     });
 
     execFileSync(
@@ -172,8 +158,8 @@ describe('runtime data migration scripts', () => {
     );
 
     const payload = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
-    expect(JSON.stringify(payload)).not.toContain('source-secret-key');
-    expect(JSON.stringify(payload)).not.toContain('cloudflare-r2');
+    expect(JSON.stringify(payload)).not.toContain('source-secret-token');
+    expect(JSON.stringify(payload)).not.toContain('private-token');
     expect(payload).toEqual(
       expect.objectContaining({
         version: 1,
@@ -242,11 +228,8 @@ describe('runtime data migration scripts', () => {
       })
     );
     expect(fs.readFileSync(path.join(targetRoot, 'media', media.asset.path))).toEqual(Buffer.from(PNG_BYTES));
-    expect(JSON.parse(fs.readFileSync(path.join(targetRoot, 'settings', 'cloudflare-r2.json'), 'utf8'))).toEqual(
-      expect.objectContaining({
-        accountId: '22222222222222222222222222222222',
-        secretAccessKey: 'target-secret-key',
-      })
+    expect(JSON.parse(fs.readFileSync(path.join(targetRoot, 'settings', 'private-token.json'), 'utf8'))).toEqual(
+      { token: 'target-secret-token' }
     );
     const importedArticles = JSON.parse(fs.readFileSync(path.join(targetRoot, 'articles', 'articles.json'), 'utf8'));
     const importedNavigation = JSON.parse(fs.readFileSync(path.join(targetRoot, 'navigation', 'tools.json'), 'utf8'));

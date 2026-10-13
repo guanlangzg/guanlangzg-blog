@@ -9,7 +9,7 @@ import {
     type SiteSettings,
 } from '@/lib/site-settings';
 import type { AppVersionInfo } from '@/lib/app-version';
-import { CloudflareR2SettingsPanel } from './CloudflareR2SettingsPanel';
+import { GitHubConnectionPanel } from './GitHubConnectionPanel';
 import { MediaStoragePanel } from './MediaStoragePanel';
 import { createEditorCsrfHeaders } from '../../editor-csrf';
 import { LogoutButton } from '../../components/LogoutButton';
@@ -660,7 +660,7 @@ export default function EditorSettingsPage() {
                             <MediaStoragePanel />
                         </aside>
 
-                        <CloudflareR2SettingsPanel />
+                        <GitHubConnectionPanel />
                     </div>
                 )}
             </EditorMain>

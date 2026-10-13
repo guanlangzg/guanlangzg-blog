@@ -12,10 +12,10 @@ import { readVerifiedLiveSnapshot } from '@/lib/live-public-reader';
 
 const MEDIA_MANIFEST_FILE_NAME = 'manifest.json';
 export const MEDIA_FILES_DIRECTORY_NAME = 'files';
-export const EDITOR_MEDIA_MANIFEST_VERSION = 1;
+const EDITOR_MEDIA_MANIFEST_VERSION = 1;
 export const EDITOR_MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-export type EditorMediaMimeType =
+type EditorMediaMimeType =
     | 'image/png'
     | 'image/jpeg'
     | 'image/webp'
@@ -73,7 +73,7 @@ export class EditorMediaPathInvalidError extends Error {
     }
 }
 
-export class EditorMediaManifestInvalidError extends Error {
+class EditorMediaManifestInvalidError extends Error {
     constructor(public readonly filePath: string) {
         super('Stored editor media manifest is invalid.');
         this.name = 'EditorMediaManifestInvalidError';
@@ -425,18 +425,7 @@ export async function readEditorMediaFile(asset: EditorMediaAsset): Promise<Uint
     }
 }
 
-export async function writeRestoredEditorMediaFile(asset: EditorMediaAsset, bytes: Uint8Array): Promise<void> {
-    const hash = sha256Hex(bytes);
-
-    if (hash !== asset.hash) {
-        throw new EditorMediaInvalidFileError(`媒体文件校验失败：${asset.path}`);
-    }
-
-    const filePath = resolveMediaFilePath(asset.path);
-    await writeMediaFileDurably(filePath, bytes);
-}
-
-export async function isEditorMediaAssetPresent(asset: EditorMediaAsset): Promise<boolean> {
+async function isEditorMediaAssetPresent(asset: EditorMediaAsset): Promise<boolean> {
     const bytes = await readEditorMediaFile(asset);
 
     if (!bytes) {
@@ -506,7 +495,7 @@ function isManagedMediaFileName(fileName: string): boolean {
     return MEDIA_HASH_FILE_PATTERN.test(fileName);
 }
 
-export async function collectOrphanMediaFiles(): Promise<string[]> {
+async function collectOrphanMediaFiles(): Promise<string[]> {
     const manifest = readEditorMediaManifest();
     const knownPaths = new Set(manifest.assets.map((asset) => asset.path));
     // A sealed live release can reference media that the current working manifest no longer

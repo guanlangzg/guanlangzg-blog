@@ -3,16 +3,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { writeJsonAtomically } from '@/lib/atomic-json-writer';
 import { getRuntimeDataRootPath } from '@/lib/runtime-config';
-import { applyRestorePlan, readCurrentRestoreState, RESTORE_SETTING_DEFAULTS, RestoreApplicationError, validateRestorableEditorData, type RestoreChoice } from '@/lib/restoring/apply';
+import { applyRestorePlan, readCurrentRestoreState, RestoreApplicationError, validateRestorableEditorData, type RestoreChoice } from '@/lib/restoring/apply';
 import { createRestorePlan, type RestorableEditorData, type RestorePlan } from '@/lib/restoring/plan';
 import { decodeBackupCommit } from '@/lib/editor-runtime/restore-backup';
-import type { RestoreResolution } from '@/lib/restoring/plan';
-
-export type { RestoreResolution };
 
 const SAFE_PLAN_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-export class RestorePlanNotFoundError extends Error {
+class RestorePlanNotFoundError extends Error {
   constructor() {
     super('Restore plan not found.');
     this.name = 'RestorePlanNotFoundError';
@@ -100,5 +97,3 @@ export async function applyStoredRestorePlan(planId: string, baseRevision: strin
     readBackup: (commit: string) => decodeBackupCommit(commit),
   });
 }
-
-export { RESTORE_SETTING_DEFAULTS };

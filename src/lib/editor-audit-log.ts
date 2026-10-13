@@ -6,15 +6,13 @@ import { getRuntimeDataRootPath } from '@/lib/runtime-config';
 const AUDIT_LOG_FILE_NAME = 'events.jsonl';
 const AUDIT_LOG_VERSION = 1;
 
-export type EditorAuditAction =
+type EditorAuditAction =
     | 'auth.login.success'
     | 'auth.login.failure'
     | 'auth.logout'
     | 'auth.setup.success'
     | 'data.write'
     | 'data.restore'
-    | 'r2.settings.update'
-    | 'r2.backup.retry'
     | 'media.gc';
 
 export interface EditorAuditEventInput {
@@ -25,7 +23,7 @@ export interface EditorAuditEventInput {
     metadata?: Record<string, unknown>;
 }
 
-export interface EditorAuditEvent extends EditorAuditEventInput {
+interface EditorAuditEvent extends EditorAuditEventInput {
     version: typeof AUDIT_LOG_VERSION;
     id: string;
     createdAt: string;
@@ -35,7 +33,7 @@ export function getEditorAuditLogFilePath(): string {
     return path.join(getRuntimeDataRootPath(), 'audit', AUDIT_LOG_FILE_NAME);
 }
 
-export function createEditorAuditEvent(input: EditorAuditEventInput): EditorAuditEvent {
+function createEditorAuditEvent(input: EditorAuditEventInput): EditorAuditEvent {
     return {
         version: AUDIT_LOG_VERSION,
         id: randomUUID(),

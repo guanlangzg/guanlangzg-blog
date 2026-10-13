@@ -32,11 +32,6 @@ function createBlockedDataRoot(): string {
   return path.join(blockingFile, 'runtime-data');
 }
 
-function writeJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf8');
-}
-
 afterEach(() => {
   restoreEnv(ORIGINAL_ENV);
   cleanupTempDirectories(tempDirectories);
@@ -71,7 +66,6 @@ describe('health API', () => {
     );
     expect(payload.dataRoot).not.toHaveProperty('path');
     expect(payload).not.toHaveProperty('manifest');
-    expect(payload).not.toHaveProperty('backupQueue');
   });
 
   it('reports writable when the configured data root does not exist yet but can be created', async () => {
@@ -110,30 +104,4 @@ describe('health API', () => {
     );
   });
 
-  it('does not fail liveness when only remote backup queue has failed tasks', async () => {
-    process.env.BLOG_DATA_ROOT = createDataRoot();
-    writeJson(path.join(process.env.BLOG_DATA_ROOT, '.backup-pending.json'), {
-      version: 2,
-      tasks: [
-        {
-          id: 'failed-task-1',
-          reason: 'remote-restore',
-          timestamp: '2026-06-19T00:00:00.000Z',
-          retries: 3,
-          attempts: 3,
-          status: 'failed',
-          writeSnapshot: true,
-          lastError: 'R2 upload failed.',
-          lastAttemptAt: '2026-06-19T00:10:00.000Z',
-        },
-      ],
-    });
-
-    const response = await GET();
-    const payload = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(payload.status).toBe('ok');
-    expect(payload).not.toHaveProperty('backupQueue');
-  });
 });

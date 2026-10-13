@@ -49,6 +49,8 @@ describe('deployment boundaries', () => {
 
     expect(update).toContain('docker tag');
     expect(update).toContain('rollback');
+    expect(update).toContain('inspect local storage permissions and workflow state integrity');
+    expect(update).not.toContain('inspect GitHub connectivity');
     expect(update).not.toMatch(/rm\s+-rf\s+.*(data|secrets)/i);
     expect(update).not.toMatch(/(rm|mv|cp).*\.env/i);
   });

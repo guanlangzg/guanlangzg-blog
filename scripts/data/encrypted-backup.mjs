@@ -1,8 +1,7 @@
-// IMPORTANT: This script provides AES-256-GCM encryption for the GitHub
-// encrypted-backup toolchain ONLY. It MUST NOT be used by the R2 automatic
-// backup pipeline. Per AGENTS.md, R2 backups must remain plaintext JSON.
+// IMPORTANT: This script provides AES-256-GCM encryption for portable JSON
+// backups. Runtime backups use their own storage and encryption handling.
 // The passphrase is sourced from GITHUB_BACKUP_ENCRYPTION_KEY (preferred) or
-// BACKUP_ENCRYPTION_KEY (legacy), never from any R2_* environment variable.
+// BACKUP_ENCRYPTION_KEY (legacy).
 import { createCipheriv, createDecipheriv, createHash, scryptSync, randomBytes } from 'node:crypto';
 
 const ENCRYPTED_BACKUP_VERSION = 1;
