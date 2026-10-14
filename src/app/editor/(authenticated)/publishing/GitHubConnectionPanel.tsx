@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { CheckCircle2, Cloud, RefreshCcw, Save } from 'lucide-react';
 import { StatusMessage } from '@/app/components/ui';
 import { readApiErrorMessage } from '../../api-error-message';
@@ -89,9 +88,13 @@ export function GitHubConnectionPanel() {
     const isVerifyingRef = useRef(false);
 
     useEffect(() => {
+        // Publishing mounts this panel as the dependency gate, so the status
+        // must load immediately; full form state stays lazy behind "展开配置".
         if (typeof window !== 'undefined' && window.location.hash === `#${CONNECTION_ANCHOR_ID}`) {
             setExpanded(true);
         }
+        void loadConnection();
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- status load is mount-only by design
     }, []);
 
     const loadConnection = useCallback(async () => {
@@ -99,13 +102,13 @@ export function GitHubConnectionPanel() {
         try {
             const response = await fetch('/api/editor/github', { credentials: 'include', cache: 'no-store' });
             const payload = await response.json().catch(() => null) as (GitHubConnectionDto & { message?: string }) | null;
-            if (!response.ok || !payload) {
+            if (!response.ok || !payload || typeof payload !== 'object') {
                 throw new Error(readApiErrorMessage(payload, 'GitHub 连接状态读取失败。'));
             }
             setDto(payload);
             if (payload.appId) setAppId(payload.appId);
             if (payload.installationId) setInstallationId(String(payload.installationId));
-            if (payload.repos) {
+            if (payload.repos?.source && payload.repos.pages && payload.repos.backup) {
                 setUseManualRepos(false);
                 setDiscovered([]);
                 setSelectedRoles({});
@@ -321,7 +324,7 @@ export function GitHubConnectionPanel() {
     const canVerify = status === 'pending' && !isSaving;
 
     return (
-        <EditorPanel className="p-4 lg:col-span-2">
+        <EditorPanel className="p-4">
             <section id={CONNECTION_ANCHOR_ID} aria-label="GitHub 连接配置">
                 <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div className="flex items-start gap-3">
@@ -331,7 +334,7 @@ export function GitHubConnectionPanel() {
                         <div>
                             <h2 className="text-lg font-semibold text-fg">GitHub 连接</h2>
                             <p className="mt-1 text-sm leading-6 text-muted">
-                                配置 GitHub App 与三个仓库（源码、Pages、备份），发布到 GitHub Pages 和私有备份都依赖此连接。
+                                发布到 GitHub Pages 和私有备份都依赖此连接：配置 GitHub App 与三个仓库（源码、Pages、备份），并验证通过后即可创建候选。
                             </p>
                         </div>
                     </div>
@@ -347,12 +350,30 @@ export function GitHubConnectionPanel() {
                 </div>
 
                 {!expanded ? (
-                    <p className="text-sm text-muted">
-                        点击“展开配置”加载实时连接状态。发布到 GitHub Pages 与私有备份都依赖此连接；
-                        备份页或发布页提示未连接时，可从
-                        <Link href="/editor/settings#github-connection" className="text-link underline">这里</Link>
-                        返回本面板。
-                    </p>
+                    <>
+                        <div className="mb-4 grid grid-cols-2 gap-3 rounded-token-card border border-border-soft bg-background p-3 text-sm md:grid-cols-4">
+                            <div>
+                                <p className="font-mono text-xs text-subtle">status</p>
+                                <p className="mt-1 flex items-center gap-1 text-muted">
+                                    {status === 'connected' ? <CheckCircle2 className="h-4 w-4 text-success" aria-label="已连接" /> : null}
+                                    {isLoading && !dto ? '读取中…' : STATUS_LABELS[status]}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="font-mono text-xs text-subtle">app id</p>
+                                <p className="mt-1 break-all text-muted">{dto?.appId ?? '-'}</p>
+                            </div>
+                            <div>
+                                <p className="font-mono text-xs text-subtle">installation</p>
+                                <p className="mt-1 text-muted">{dto?.installationId ?? '-'}</p>
+                            </div>
+                            <div>
+                                <p className="font-mono text-xs text-subtle">repos</p>
+                                <p className="mt-1 text-muted">{dto?.repos ? '已配置' : '未配置'}</p>
+                            </div>
+                        </div>
+                        <p className="text-sm text-muted">{STATUS_GUIDANCE[status]}</p>
+                    </>
                 ) : (
                     <>
                         {message ? <div className="mb-4"><StatusMessage tone={message.tone}>{message.text}</StatusMessage></div> : null}

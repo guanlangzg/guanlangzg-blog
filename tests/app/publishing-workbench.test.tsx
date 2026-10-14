@@ -14,14 +14,76 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+type ResponseLike = { ok: boolean; status?: number; json: () => Promise<unknown> };
+
+function jsonResponse(body: unknown, status = 200): ResponseLike {
+  return { ok: status < 400, status, json: async () => body };
+}
+
+// The publishing page mounts the GitHub connection panel, which adds a
+// /api/editor/github status fetch alongside the release/revision polls. Mock
+// by method+URL so call order never matters.
+interface RouteState {
+  releases?: unknown[][];
+  revisions?: Record<string, string>;
+  github?: unknown;
+  jobs?: Record<string, unknown>;
+  postResponses?: Record<string, () => ResponseLike>;
+}
+
+function mockPublishingRoutes(state: RouteState = {}) {
+  const releaseBatches = [...(state.releases ?? [[]])];
+
+  fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (method === 'POST' && state.postResponses?.[url]) {
+      return Promise.resolve(state.postResponses[url]());
+    }
+
+    if (url === '/api/editor/publishing-revision') {
+      return Promise.resolve(jsonResponse({ revisions: state.revisions ?? {} }));
+    }
+
+    if (url === '/api/editor/github') {
+      return Promise.resolve(jsonResponse(state.github ?? { status: 'not_configured' }));
+    }
+
+    if (url === '/api/editor/releases') {
+      const batch = releaseBatches.shift() ?? releaseBatches.at(-1) ?? [];
+      return Promise.resolve(jsonResponse({ releases: batch }));
+    }
+
+    if (url.startsWith('/api/editor/jobs/')) {
+      return Promise.resolve(jsonResponse(state.jobs?.[url] ?? {}));
+    }
+
+    return Promise.resolve(jsonResponse({}));
+  });
+}
+
 describe('publishing workbench', () => {
+  it('shows the GitHub connection panel above the candidate form', async () => {
+    mockPublishingRoutes({ github: { status: 'connected', appId: '42', installationId: 7, privateKeyConfigured: true, repos: null } });
+
+    render(<PublishingPage />);
+    expect(await screen.findByText('已连接')).toBeInTheDocument();
+    expect(screen.getByText('GitHub 连接')).toBeInTheDocument();
+    // The candidate panel must sit below the connection gate in DOM order.
+    const connectionPanel = screen.getByText('GitHub 连接').closest('section');
+    const candidateHeading = screen.getByText('创建发布候选');
+    if (!connectionPanel) throw new Error('GitHub connection panel section not rendered');
+    expect(connectionPanel.compareDocumentPosition(candidateHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('creates a candidate using the selected scope and shows the release state', async () => {
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ revisions: { article: 'revision-1', navigation: 'navigation-revision' } }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releaseId: 'rel-1', status: 'building' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [{ id: 'rel-1', scope: { kind: 'navigation' }, status: 'building', candidateDigest: 'a'.repeat(64), artifactDigest: null, hasBackupProof: false, error: null }] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ revisions: { article: 'revision-1', navigation: 'navigation-revision' } }) });
+    const release = { id: 'rel-1', scope: { kind: 'navigation' }, status: 'building', candidateDigest: 'a'.repeat(64), artifactDigest: null, hasBackupProof: false, error: null };
+    mockPublishingRoutes({
+      releases: [[], [release]],
+      revisions: { article: 'revision-1', navigation: 'navigation-revision' },
+      postResponses: { '/api/editor/releases': () => jsonResponse({ releaseId: 'rel-1', status: 'building' }) },
+    });
 
     render(<PublishingPage />);
     await screen.findByText('发布记录');
@@ -37,12 +99,12 @@ describe('publishing workbench', () => {
 
   it('sends both server-provided digests when confirming a ready candidate', async () => {
     const ready = { id: 'rel-1', scope: { kind: 'settings' }, status: 'preview_ready', candidateDigest: 'a'.repeat(64), artifactDigest: 'b'.repeat(64), hasBackupProof: true, error: null };
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [ready] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ revisions: {} }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ taskId: 'job-1' }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [ready] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ revisions: {} }) });
+    mockPublishingRoutes({
+      releases: [[ready]],
+      revisions: {},
+      postResponses: { '/api/editor/releases/rel-1/confirmation': () => jsonResponse({ taskId: 'job-1' }) },
+    });
+
     render(<PublishingPage />);
     const button = await screen.findByRole('button', { name: '确认发布' });
     fireEvent.click(button);
@@ -53,21 +115,19 @@ describe('publishing workbench', () => {
   });
 
   it('shows the nested server error message when creating a candidate fails', async () => {
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ revisions: { navigation: 'revision-1' } }) })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 409,
-        json: async () => ({
+    mockPublishingRoutes({
+      revisions: { navigation: 'revision-1' },
+      postResponses: {
+        '/api/editor/releases': () => jsonResponse({
           error: {
             code: 'REVISION_CONFLICT',
             message: '数据已变化，请刷新后重试。',
             retryable: false,
             requestId: 'req-conflict',
           },
-        }),
-      });
+        }, 409),
+      },
+    });
 
     render(<PublishingPage />);
     await screen.findByText('发布记录');
@@ -93,13 +153,11 @@ describe('publishing workbench', () => {
       createdAt: '2026-10-06T00:00:00.000Z',
       updatedAt: '2026-10-06T00:00:00.000Z',
     };
-
-    fetchMock
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [release] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ revisions: {} }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
+    mockPublishingRoutes({
+      releases: [[release]],
+      revisions: {},
+      jobs: {
+        '/api/editor/jobs/job-1': {
           id: 'job-1',
           type: 'publish',
           status: 'failed',
@@ -107,8 +165,9 @@ describe('publishing workbench', () => {
           nextAttemptAt: null,
           remoteCommit: null,
           error: { message: '构建步骤失败：依赖安装超时。' },
-        }),
-      });
+        },
+      },
+    });
 
     render(<PublishingPage />);
 
@@ -128,6 +187,10 @@ describe('publishing workbench', () => {
 
       if (url === '/api/editor/publishing-revision') {
         return Promise.resolve({ ok: true, json: async () => ({ revisions: {} }) });
+      }
+
+      if (url === '/api/editor/github') {
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'not_configured' }) });
       }
 
       if (url === '/api/editor/releases') {
@@ -177,7 +240,10 @@ describe('publishing workbench', () => {
   });
 
   it('does not offer confirmation without a sealed artifact digest', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ releases: [{ id: 'rel-1', scope: { kind: 'settings' }, status: 'building', candidateDigest: 'a'.repeat(64), artifactDigest: null, hasBackupProof: false, error: null }] }) }).mockResolvedValue({ ok: true, json: async () => ({ revisions: { article: 'revision-1' } }) });
+    mockPublishingRoutes({
+      releases: [[{ id: 'rel-1', scope: { kind: 'settings' }, status: 'building', candidateDigest: 'a'.repeat(64), artifactDigest: null, hasBackupProof: false, error: null }]],
+      revisions: { article: 'revision-1' },
+    });
     render(<PublishingPage />);
     await waitFor(() => expect(screen.getByText('发布记录')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: '确认发布' })).not.toBeInTheDocument();

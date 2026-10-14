@@ -66,7 +66,7 @@ describe('EditorSettingsPage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps the GitHub connection panel available without loading it automatically', async () => {
+  it('stays a pure content settings page without any GitHub connection entry', async () => {
     fetchMock.mockResolvedValueOnce(createJsonResponse({
       persistent: true,
       revision: 'settings-revision',
@@ -78,7 +78,7 @@ describe('EditorSettingsPage', () => {
     });
     await flushPromises();
 
-    expect(container.textContent).toContain('GitHub 连接');
+    expect(container.textContent).not.toContain('GitHub 连接');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('/api/data/settings', expect.any(Object));
   });

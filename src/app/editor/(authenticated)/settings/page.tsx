@@ -9,7 +9,6 @@ import {
     type SiteSettings,
 } from '@/lib/site-settings';
 import type { AppVersionInfo } from '@/lib/app-version';
-import { GitHubConnectionPanel } from './GitHubConnectionPanel';
 import { MediaStoragePanel } from './MediaStoragePanel';
 import { createEditorCsrfHeaders } from '../../editor-csrf';
 import { LogoutButton } from '../../components/LogoutButton';
@@ -653,14 +652,12 @@ export default function EditorSettingsPage() {
                                 <p className="font-mono text-xs text-accent">backup scope</p>
                                 <h2 className="mt-1 text-base font-semibold text-fg">备份会包含设置</h2>
                                 <p className="mt-2 text-sm leading-6 text-muted">
-                                    编辑中心导出的 JSON 备份会包含文章、导航和站点设置。旧备份没有设置字段时，会恢复为默认设置。
+                                    本地 JSON 备份（编辑中心 → 数据与备份）会包含文章、导航和站点设置。旧备份没有设置字段时，会恢复为默认设置。
                                 </p>
                             </EditorPanel>
 
                             <MediaStoragePanel />
                         </aside>
-
-                        <GitHubConnectionPanel />
                     </div>
                 )}
             </EditorMain>
