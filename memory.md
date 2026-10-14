@@ -247,6 +247,7 @@
 - **面板迁移到发布页的 fetch 顺序影响**：`GitHubConnectionPanel` 挂载即 `GET /api/editor/github`（发布依赖门槛，状态必须实时；完整表单仍懒加载在“展开配置”后）。`publishing-workbench.test.tsx` 原用 `mockResolvedValueOnce` 顺序链会被这个额外请求打穿，已改为按 method+URL 路由的声明式 mock（`mockPublishingRoutes` 支持 `releases` 批次队列、`revisions`、`github`、`jobs`、`postResponses`）。给页面新增挂载即发请求的子组件时，先查该页测试是否依赖 fetch 顺序。
 - 面板折叠态现在显示 status/app id/installation/repos 摘要格 + `STATUS_GUIDANCE` 文案；`loadConnection` 对畸形 DTO 增加 `payload.repos?.source` 防御，避免非预期响应让 `setDto` 后渲染崩溃。锚点 `#github-connection` 随面板迁移，`backups/page.tsx` 引导链接改指 `/editor/publishing#github-connection`。
 - 验证：lint、tsc、knip、check-env 全过；聚焦回归 5 文件 28 项通过；全量 Vitest `--maxWorkers=2` **123 文件 / 927 项通过**；`npm run build` 通过；Python unittest 11 项通过。未验证：浏览器端手工 smoke（真实连接状态下的折叠/展开视觉）、真实 GitHub App 凭据链路。
+- **2026-10-14 已部署生产**：PR #4 squash 合并为 `31f27f7c`，CI 全绿，镜像 digest `sha256:76e9a99f…`；工作站 GHCR 直连拉取两次截断（HTTP/2 PROTOCOL_ERROR、HTTP/1.1 unexpected EOF），经 digest 一致性校验后改用 `ghcr.nju.edu.cn` 镜像站导出 tar→SCP→`docker load`；切换后按 90s stale 规则 restart 回收旧租约，容器 healthy、revision 精确匹配、公开路由全 200。完整链路与回滚标签见服务器目录 `hangzhou2-2/memory.md` 同日小节。
 
 
 - 部署 Docker 项目时，由 GitHub Actions 构建、测试并发布镜像；**镜像必须先下载到部署工作站，校验后打成服务器可 `docker load` 的归档，再 SCP 上传；生产服务器只导入并运行镜像，不直接访问 GHCR，也不做源码构建**。工作站有 Docker 时使用 `docker pull/save`；没有 Docker 时可用经过校验的 Crane 从 GHCR 导出 Docker tarball。这样节约服务器资源并提升部署速度。
