@@ -1,12 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
 import { AlertTriangle, CheckCircle2, ExternalLink, RefreshCcw, RotateCcw } from 'lucide-react';
 import { StatusMessage } from '@/app/components/ui';
 import { readApiErrorMessage } from '../../api-error-message';
 import { createEditorCsrfHeaders } from '../../editor-csrf';
 import { EditorButton, EditorMain, EditorPage, EditorPanel, EditorTopBar } from '../../components/EditorShell';
+import { GitHubConnectionPanel } from './GitHubConnectionPanel';
 
 type ScopeKind = 'article' | 'navigation' | 'settings' | 'bootstrap';
 type Scope = { kind: ScopeKind; articleId?: string; action?: 'publish' | 'withdraw'; articleIds?: string[] };
@@ -100,7 +100,8 @@ export default function PublishingPage() {
 
   return <EditorPage><EditorTopBar title="发布工作台" description="候选、固定版本预览与 Pages 状态" backHref="/editor" /><EditorMain width="lg" className="space-y-4">
     {message ? <StatusMessage tone={message.tone}>{message.text}</StatusMessage> : null}
-    <EditorPanel className="p-4"><p className="mb-3 text-sm text-muted">发布依赖已验证的 GitHub 连接：请先在 <Link href="/editor/settings#github-connection" className="text-link underline">站点设置 → GitHub 连接</Link> 完成 App 配置并验证通过。</p><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-xs text-accent">candidate</p><h2 className="mt-1 text-lg font-semibold">创建发布候选</h2><p className="mt-1 text-sm text-muted">候选从当前工作副本按选定范围冻结；编辑文章状态不会直接上线。</p></div><EditorButton onClick={() => void load()} disabled={busy}><RefreshCcw className="h-4 w-4" />刷新状态</EditorButton></div>
+    <GitHubConnectionPanel />
+    <EditorPanel className="p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-xs text-accent">candidate</p><h2 className="mt-1 text-lg font-semibold">创建发布候选</h2><p className="mt-1 text-sm text-muted">候选从当前工作副本按选定范围冻结；编辑文章状态不会直接上线。发布依赖上方已验证的 GitHub 连接。</p></div><EditorButton onClick={() => void load()} disabled={busy}><RefreshCcw className="h-4 w-4" />刷新状态</EditorButton></div>
       <div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium">发布范围<select className="mt-1 min-h-11 w-full rounded-token-card border border-border bg-surface px-3 text-sm" value={kind} onChange={(event) => setKind(event.target.value as ScopeKind)}><option value="article">单篇文章</option><option value="navigation">导航</option><option value="settings">站点设置</option><option value="bootstrap">首次发布选择</option></select></label>
       {kind === 'article' ? <><label className="text-sm font-medium">文章稳定 ID<input className="mt-1 min-h-11 w-full rounded-token-card border border-border bg-surface px-3 text-sm" value={articleId} onChange={(event) => setArticleId(event.target.value)} placeholder="从文章管理复制 ID" /></label><label className="text-sm font-medium">操作<select className="mt-1 min-h-11 w-full rounded-token-card border border-border bg-surface px-3 text-sm" value={action} onChange={(event) => setAction(event.target.value as 'publish' | 'withdraw')}><option value="publish">发布</option><option value="withdraw">从线上撤回（保留草稿）</option></select></label></> : null}
       {kind === 'bootstrap' ? <label className="text-sm font-medium sm:col-span-2">首次发布文章 ID（逗号分隔）<input className="mt-1 min-h-11 w-full rounded-token-card border border-border bg-surface px-3 text-sm" value={articleIds} onChange={(event) => setArticleIds(event.target.value)} placeholder="id-1, id-2" /></label> : null}</div>

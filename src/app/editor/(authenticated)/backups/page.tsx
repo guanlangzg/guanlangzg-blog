@@ -63,7 +63,7 @@ export default function BackupsPage() {
       if (!response.ok) throw new Error(readApiErrorMessage(payload, `HTTP ${response.status}：远端备份历史暂不可查询。`));
       if (!payload || payload.status !== 'available' || !Array.isArray(payload.items)) {
         const reason = payload?.unavailableReason === 'not_connected'
-          ? 'GitHub 备份尚未连接。请先在「站点设置 → GitHub 连接」完成配置并验证。'
+          ? 'GitHub 备份尚未连接。请先在「发布工作台 → GitHub 连接」完成配置并验证。'
           : 'GitHub 远端备份当前不可查询。';
         setNotConnected(payload?.unavailableReason === 'not_connected');
         setItems([]);
@@ -151,7 +151,7 @@ export default function BackupsPage() {
             <div className="flex flex-wrap gap-2"><EditorButton onClick={() => void loadBackups(null, false)} disabled={isLoading}><RefreshCcw className="h-4 w-4" />刷新</EditorButton><EditorButton variant="primary" onClick={createBackup} disabled={busy}><GitCommitHorizontal className="h-4 w-4" />创建 GitHub 备份</EditorButton></div>
           </div>
           {isLoading ? <p className="mt-4 text-sm text-muted">正在查询备份历史…</p> : null}
-          {unavailable ? <div className="mt-4 flex gap-2 rounded-token-card border border-warning-200 bg-warning-50 p-3 text-sm text-warning-600"><AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>远端备份历史暂不可查询</strong><br />{unavailable}{notConnected ? <span> <Link href="/editor/settings#github-connection" className="underline">前往配置 GitHub 连接</Link></span> : null}</span></div> : null}
+          {unavailable ? <div className="mt-4 flex gap-2 rounded-token-card border border-warning-200 bg-warning-50 p-3 text-sm text-warning-600"><AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>远端备份历史暂不可查询</strong><br />{unavailable}{notConnected ? <span> <Link href="/editor/publishing#github-connection" className="underline">前往发布工作台配置 GitHub 连接</Link></span> : null}</span></div> : null}
           {items.length > 0 ? <ul className="mt-4 divide-y divide-border">{items.map((item) => <li key={item.commitSha} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><code className="break-all text-xs text-fg">{item.commitSha}</code><p className="mt-1 text-xs text-muted">{formatTime(item.committedAt)} · GitHub 远端提交 · digest {item.digest ?? '未提供'}</p></div><div className="flex items-center gap-2"><label className="flex items-center gap-2 text-sm"><input type="radio" name="backup-commit" value={item.commitSha} checked={selectedCommit === item.commitSha} disabled={busy} onChange={() => { setSelectedCommit(item.commitSha); setPlan(null); }} />选择</label><EditorButton disabled={busy} onClick={() => { setSelectedCommit(item.commitSha); void createPlanFor(item.commitSha, setBusy, setMessage, setPlanId, setPlan, setChoices); }}>生成合并计划</EditorButton></div></li>)}</ul> : null}
           {!isLoading && !unavailable && items.length === 0 ? <p className="mt-4 text-sm text-muted">暂无备份。</p> : null}
           {items.length > 0 && selected ? <p className="mt-2 text-xs text-subtle">已选远端 commit：{selected.commitSha}；恢复前会读取计划并要求逐项处理冲突。</p> : null}

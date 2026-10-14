@@ -240,6 +240,14 @@
 - 删除直接依赖后，`package-lock.json` 可比源码 diff 大幅收缩；`node_modules` 是被忽略的旧安装产物，须先跑 `npm prune --dry-run --ignore-scripts` 审核范围，再按 lockfile 执行 `npm prune --ignore-scripts`。若 `npm ls` 仍显示某依赖，先查完整依赖树；例如 `undici` 是 jsdom 的传递依赖，保留其 `overrides` 安全钉版本，不要误当成直接依赖继续删。
 - 备份能力边界：R2 移除后仍须保留 GitHub 私有备份作业/水位与候选 proof 门槛、本地 JSON 导出/原子恢复、受管媒体清单和 GC。聚焦回归覆盖这些路径；全量 Vitest 与 Docker runner 仍按本项目约束在 CI 执行。
 
+## 2026-10-14 编辑中心信息架构重组（本轮实测）
+
+- 决策与产品表述见 `最终博客项目讨论汇总.md` 同日小节。本轮只动 UI 信息架构，未改任何路由、API 或数据格式：首页 6 平级卡片 → 4 任务分组；`GitHubConnectionPanel` 从 `settings/` 移到 `publishing/` 并挂发布工作台顶部；`/editor/settings` 回归纯内容；首页内联本地 JSON 备份逻辑抽为 `src/app/editor/components/LocalBackupPanel.tsx`。
+- **Vite 相对导入解析坑（本轮踩坑，勿再犯）**：在 `(authenticated)/page.tsx` 里用 `../components/LocalBackupPanel` 指向 `(authenticated)/components/` 新目录时，Vite `resolveId` 返回 null（同目录的 `../components/EditorShell` 却能解析到 `src/app/editor/components/`）——根因是 `../` 先归一化到父目录再解析，而仓库存在两个同名 `components` 目录时该相对路径解析不稳定（Windows 中文路径下更难排查，fs 层 existsSync 全真）。修法：共享组件直接放 `src/app/editor/components/`（与 EditorShell 同目录），从那里 `../` 上溯两级引用 `backup-current-manifest`/`editor-csrf`。新组件放目录前先确认该目录已有可被相对导入解析的文件。
+- **面板迁移到发布页的 fetch 顺序影响**：`GitHubConnectionPanel` 挂载即 `GET /api/editor/github`（发布依赖门槛，状态必须实时；完整表单仍懒加载在“展开配置”后）。`publishing-workbench.test.tsx` 原用 `mockResolvedValueOnce` 顺序链会被这个额外请求打穿，已改为按 method+URL 路由的声明式 mock（`mockPublishingRoutes` 支持 `releases` 批次队列、`revisions`、`github`、`jobs`、`postResponses`）。给页面新增挂载即发请求的子组件时，先查该页测试是否依赖 fetch 顺序。
+- 面板折叠态现在显示 status/app id/installation/repos 摘要格 + `STATUS_GUIDANCE` 文案；`loadConnection` 对畸形 DTO 增加 `payload.repos?.source` 防御，避免非预期响应让 `setDto` 后渲染崩溃。锚点 `#github-connection` 随面板迁移，`backups/page.tsx` 引导链接改指 `/editor/publishing#github-connection`。
+- 验证：lint、tsc、knip、check-env 全过；聚焦回归 5 文件 28 项通过；全量 Vitest `--maxWorkers=2` **123 文件 / 927 项通过**；`npm run build` 通过；Python unittest 11 项通过。未验证：浏览器端手工 smoke（真实连接状态下的折叠/展开视觉）、真实 GitHub App 凭据链路。
+
 
 - 部署 Docker 项目时，由 GitHub Actions 构建、测试并发布镜像；**镜像必须先下载到部署工作站，校验后打成服务器可 `docker load` 的归档，再 SCP 上传；生产服务器只导入并运行镜像，不直接访问 GHCR，也不做源码构建**。工作站有 Docker 时使用 `docker pull/save`；没有 Docker 时可用经过校验的 Crane 从 GHCR 导出 Docker tarball。这样节约服务器资源并提升部署速度。
 - 本项目 CI 链路为 `check` + `runner-image` + `publish-image`。按完整提交 SHA 使用 `ghcr.io/guanlangzg/guanlangzg-blog:sha-<完整 SHA>`；切换前核验 workflow 成功、GHCR manifest digest、平台、config digest 和所有 layer digest。`docker load` 后核对 revision 标签/平台/层数；Docker 导入生成的本地 image ID 可能与 OCI config digest 不同，应用 manifest/config/layer 身份验证，不要因 image ID 表示变化误判内容不一致。

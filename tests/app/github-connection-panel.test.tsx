@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitHubConnectionPanel } from '@/app/editor/(authenticated)/settings/GitHubConnectionPanel';
+import { GitHubConnectionPanel } from '@/app/editor/(authenticated)/publishing/GitHubConnectionPanel';
 
 type ConnectionDto = {
     privateKeyConfigured: boolean;
@@ -113,15 +113,19 @@ describe('GitHubConnectionPanel', () => {
         fireEvent.click(screen.getByLabelText('将 owner/backup 用作备份仓库'));
     }
 
-    it('loads the connection status lazily when expanded', async () => {
+    it('loads the connection status on mount and shows a summary while collapsed', async () => {
         currentConnection = connectedDto;
         render(<GitHubConnectionPanel />);
-
-        expect(screen.queryByText('已连接')).not.toBeInTheDocument();
-        await expandPanel();
+        await flushAll();
 
         expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/editor/github'))).toBe(true);
         expect(screen.getByText('已连接')).toBeInTheDocument();
+        // Collapsed view keeps the form lazy: no inputs are rendered yet.
+        expect(screen.queryByLabelText('App ID')).not.toBeInTheDocument();
+        expect(screen.getByText(/发布工作台与 GitHub 备份现已可用/)).toBeInTheDocument();
+
+        await expandPanel();
+
         expect((screen.getByLabelText('App ID') as HTMLInputElement).value).toBe('42');
         expect((screen.getByLabelText('Installation ID') as HTMLInputElement).value).toBe('7');
     });
@@ -135,6 +139,17 @@ describe('GitHubConnectionPanel', () => {
         expect(resolveCall).toBeDefined();
         expect(JSON.parse(resolveCall?.[1]?.body as string)).toEqual({ appId: '42', installationId: 7 });
         expect((screen.getByLabelText('将 owner/source 用作源码仓库') as HTMLInputElement).checked).toBe(true);
+    });
+
+    it('offers to expand configuration when not connected', async () => {
+        render(<GitHubConnectionPanel />);
+        await flushAll();
+
+        // not_configured: the status cell and the collapsed guidance both
+        // mention it, and the form stays behind the expand button.
+        expect(screen.getAllByText('未配置').length).toBeGreaterThan(0);
+        expect(screen.getByText(/填写 App 信息并保存后/)).toBeInTheDocument();
+        expect(screen.queryByLabelText('App ID')).not.toBeInTheDocument();
     });
 
     it('saves the configuration, runs verification, and reports success', async () => {
